@@ -24,6 +24,15 @@ public final class SystemCaptureSession: CaptureSession, @unchecked Sendable {
     private var mixer: StreamMixer?
     private let ioQueue = DispatchQueue(label: "aural.tap.io")
     private var started = false
+    private var processListListener: AudioObjectPropertyListenerBlock?
+    private let listenerQueue = DispatchQueue(label: "aural.tap.lifecycle")
+    private let sourceLostLock = NSLock()
+    private var sourceLostFired = false
+
+    /// Invoked once (on an arbitrary queue) if every tapped process exits
+    /// while capturing (`.processes` scope only). The session keeps running
+    /// until `stop()`; callers typically finalize and exit (PRD §6.2).
+    public var onSourceLost: (@Sendable () -> Void)?
 
     /// - Parameters:
     ///   - scope: what to capture (global system audio or specific processes).
@@ -169,6 +178,51 @@ public final class SystemCaptureSession: CaptureSession, @unchecked Sendable {
             teardown()
             throw TapEngineError.ioProcFailed(status)
         }
+
+        // 5. Watch for all tapped processes exiting (PRD §6.2).
+        if case .processes(let tappedIDs) = scope {
+            installProcessExitWatcher(tappedIDs: Set(tappedIDs))
+        }
+    }
+
+    private func installProcessExitWatcher(tappedIDs: Set<AudioObjectID>) {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyProcessObjectList,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain)
+        let listener: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
+            guard let self else { return }
+            let alive = Self.currentProcessObjectIDs()
+            guard alive.isDisjoint(with: tappedIDs) else { return }
+            self.sourceLostLock.lock()
+            let alreadyFired = self.sourceLostFired
+            self.sourceLostFired = true
+            self.sourceLostLock.unlock()
+            if !alreadyFired { self.onSourceLost?() }
+        }
+        let status = AudioObjectAddPropertyListenerBlock(
+            AudioObjectID(kAudioObjectSystemObject), &address, listenerQueue, listener)
+        if status == noErr {
+            processListListener = listener
+        }
+    }
+
+    private static func currentProcessObjectIDs() -> Set<AudioObjectID> {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyProcessObjectList,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain)
+        let systemID = AudioObjectID(kAudioObjectSystemObject)
+        var size: UInt32 = 0
+        guard AudioObjectGetPropertyDataSize(systemID, &address, 0, nil, &size) == noErr,
+            size > 0
+        else { return [] }
+        let count = Int(size) / MemoryLayout<AudioObjectID>.stride
+        var ids = [AudioObjectID](repeating: 0, count: count)
+        guard ids.withUnsafeMutableBytes({
+            AudioObjectGetPropertyData(systemID, &address, 0, nil, &size, $0.baseAddress!)
+        }) == noErr else { return [] }
+        return Set(ids)
     }
 
     public func stop() {
@@ -177,6 +231,16 @@ public final class SystemCaptureSession: CaptureSession, @unchecked Sendable {
     }
 
     private func teardown() {
+        if let processListListener {
+            var address = AudioObjectPropertyAddress(
+                mSelector: kAudioHardwarePropertyProcessObjectList,
+                mScope: kAudioObjectPropertyScopeGlobal,
+                mElement: kAudioObjectPropertyElementMain)
+            AudioObjectRemovePropertyListenerBlock(
+                AudioObjectID(kAudioObjectSystemObject), &address, listenerQueue,
+                processListListener)
+            self.processListListener = nil
+        }
         if let ioProcID, aggregateID != kAudioObjectUnknown {
             AudioDeviceStop(aggregateID, ioProcID)
             AudioDeviceDestroyIOProcID(aggregateID, ioProcID)

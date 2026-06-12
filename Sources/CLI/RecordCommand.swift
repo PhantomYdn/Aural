@@ -189,6 +189,15 @@ struct RecordingSession {
         // ever arrives and warn at the end.
         let silenceDetector = captureSystem ? SilenceDetector() : nil
 
+        // If every tapped app exits mid-recording, finalize cleanly and
+        // report on stderr (PRD §6.2).
+        if let tapSession = session as? SystemCaptureSession {
+            tapSession.onSourceLost = {
+                Log.notice("all tapped applications exited; stopping recording")
+                done.signal()
+            }
+        }
+
         do {
             try session.start { data in
                 ioQueue.async {

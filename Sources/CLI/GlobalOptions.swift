@@ -21,6 +21,11 @@ enum Log {
     static func error(_ message: String) {
         FileHandle.standardError.write(Data("aural: error: \(message)\n".utf8))
     }
+
+    /// Notice output, always shown (no error prefix).
+    static func notice(_ message: String) {
+        FileHandle.standardError.write(Data("aural: \(message)\n".utf8))
+    }
 }
 
 extension ParsableCommand {
