@@ -6,6 +6,7 @@ Native macOS CLI (single Swift binary) that captures microphone and system/per-a
 
 - prd: [PRD.md](PRD.md) — product requirements (v1.0 MVP)
 - plan: [PLAN.md](PLAN.md) — phased implementation plan; track progress via checkboxes
+- permissions: [docs/permissions.md](docs/permissions.md) — TCC setup (mic + system audio recording), terminal attribution caveats
 
 ## Key Conventions
 

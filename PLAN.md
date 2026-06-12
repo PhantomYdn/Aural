@@ -29,9 +29,9 @@
 - [x] Implement `--exclude-app ID` (repeatable): capture all system audio except listed apps (US07)
 - [x] Implement `--mix`: mix microphone into system/app capture
 - [x] Handle tap lifecycle: create on start, destroy on stop; finalise recording cleanly and report on stderr if tapped app quits mid-recording (PRD §6.2)
-- [ ] Handle "System Audio Recording" TCC permission: detect denial, emit actionable error; document prompt/approval flow incl. terminal-attributed permission for unbundled CLI (PRD §7 Security, Open Q4)
+- [x] Handle "System Audio Recording" TCC permission: detect denial, emit actionable error; document prompt/approval flow incl. terminal-attributed permission for unbundled CLI (PRD §7 Security, Open Q4) — see docs/permissions.md; denial yields silent zeroed buffers, detected via SilenceDetector warning
 - [ ] Validate latency drift < 200 ms between mic and system tracks over a 60-minute dual-source recording (PRD §2)
-- [ ] Integration tests: per-app capture isolation (excluded app audio absent from recording)
+- [x] Integration tests: per-app capture isolation (excluded app audio absent from recording) — Scripts/e2e-app-isolation.sh (Goertzel-based, 120x suppression verified)
 
 ## Phase 3: Formats, Chunking & Conversion (PRD M3)
 

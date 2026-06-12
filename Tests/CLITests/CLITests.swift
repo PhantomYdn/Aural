@@ -37,11 +37,33 @@ struct RecordParsingTests {
         ["-o", "x.wav", "--stdout"],          // -o conflicts with --stdout
         ["-o", "x.wav", "--no-output"],       // -o conflicts with --no-output
         ["--stdout", "--no-output"],          // stream conflicts with dry run
+        ["-o", "x.wav", "--system", "--app", "foo"],         // system is everything
+        ["-o", "x.wav", "--app", "a", "--exclude-app", "b"],  // include vs exclude
+        ["-o", "x.wav", "--mix"],                             // mix needs a tap mode
+        ["-o", "x.wav", "--system", "-d", "UID"],             // device needs --mix
     ])
     func rejectsInvalidCombinations(_ arguments: [String]) {
         #expect(throws: (any Error).self) {
             _ = try Record.parse(arguments)
         }
+    }
+
+    @Test(arguments: [
+        ["-o", "x.wav", "--system"],
+        ["-o", "x.wav", "--system", "--mix"],
+        ["-o", "x.wav", "--system", "--mix", "-d", "SomeUID"],
+        ["-o", "x.wav", "--app", "com.example.app", "--app", "123"],
+        ["-o", "x.wav", "--app", "123", "--mix"],
+        ["-o", "x.wav", "--exclude-app", "com.example.app"],
+    ])
+    func acceptsTapModeCombinations(_ arguments: [String]) throws {
+        _ = try Record.parse(arguments)
+    }
+
+    @Test func repeatableAppFlagAccumulates() throws {
+        let record = try Record.parse(
+            ["-o", "x.wav", "--app", "com.a", "--app", "com.b", "--app", "42"])
+        #expect(record.apps == ["com.a", "com.b", "42"])
     }
 }
 
