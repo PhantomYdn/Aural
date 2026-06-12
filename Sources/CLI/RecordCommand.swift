@@ -76,6 +76,13 @@ struct Record: ParsableCommand {
         valueName: "bundle-id|pid"))
     var excludeApps: [String] = []
 
+    @Flag(name: .customLong("mix"), help: """
+        Mix the microphone (default input, or -d/--device) into a \
+        --system/--app/--exclude-app capture. Sources are clock-synced \
+        with drift compensation.
+        """)
+    var mix = false
+
     @OptionGroup var options: GlobalOptions
 
     func validate() throws {
@@ -107,9 +114,14 @@ struct Record: ParsableCommand {
         if !apps.isEmpty && !excludeApps.isEmpty {
             throw ValidationError("--app and --exclude-app are mutually exclusive.")
         }
-        if (captureSystem || !apps.isEmpty || !excludeApps.isEmpty) && device != nil {
+        let tapMode = captureSystem || !apps.isEmpty || !excludeApps.isEmpty
+        if mix && !tapMode {
             throw ValidationError(
-                "-d/--device selects a microphone and does not apply to system/app capture.")
+                "--mix requires a system/app capture (--system, --app, or --exclude-app).")
+        }
+        if tapMode && !mix && device != nil {
+            throw ValidationError(
+                "-d/--device selects a microphone; with system/app capture it only applies together with --mix.")
         }
     }
 
@@ -126,7 +138,8 @@ struct Record: ParsableCommand {
                 noOutput: noOutput,
                 captureSystem: captureSystem,
                 apps: apps,
-                excludeApps: excludeApps
+                excludeApps: excludeApps,
+                mix: mix
             ).run()
         }
     }
@@ -146,6 +159,7 @@ struct RecordingSession {
     let captureSystem: Bool
     let apps: [String]
     let excludeApps: [String]
+    let mix: Bool
 
     func run() throws {
         // 1. Build the capture session for the requested source.
@@ -269,13 +283,27 @@ struct RecordingSession {
     /// Builds the capture session and output format for the requested source.
     private func makeCapture() throws -> (CaptureSession, PCMFormat) {
         if let (scope, label) = try makeTapScope() {
-            // Tap capture: stereo by default; mic TCC not needed.
+            // Tap capture: stereo by default.
             let channelCount = channels ?? 2
             let format = PCMFormat(
                 sampleRate: rate, bitsPerSample: bits, channels: channelCount)
-            Log.verbose("source: \(label) -> \(rate) Hz, \(bits)-bit, \(channelCount) ch")
+
+            var micUID: String? = nil
+            var sourceLabel = label
+            if mix {
+                let micDevice = try resolveInputDevice()
+                // The mic joins the tap's aggregate device, so mic TCC applies.
+                do {
+                    try MicCaptureSession.ensureMicrophonePermission()
+                } catch let error as TapEngineError {
+                    throw AuralError.noPermission(error.description)
+                }
+                micUID = micDevice.uid
+                sourceLabel += " + mic (\(micDevice.name))"
+            }
+            Log.verbose("source: \(sourceLabel) -> \(rate) Hz, \(bits)-bit, \(channelCount) ch")
             let session = SystemCaptureSession(
-                scope: scope, micDeviceUID: nil, outputFormat: format)
+                scope: scope, micDeviceUID: micUID, outputFormat: format)
             return (session, format)
         }
 
