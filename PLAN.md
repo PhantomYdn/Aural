@@ -16,8 +16,8 @@
 - [x] Add `--json` output mode to `devices` and `apps`; exit 0 with empty array when nothing found (US06)
 - [x] Implement mic recording to WAV: default input device fallback, `-d/--device`, `-r/--rate`, `-b/--bits`, `-c/--channels`, `-t/--duration` (US01)
 - [x] Implement SIGINT/SIGTERM handling: finalise WAV header so file remains playable (PRD §7 Reliability)
-- [ ] Implement stdout streaming: raw PCM when `-o` omitted, `--stdout` with streamable WAV header; verify interop with `ffmpeg`/`sox`
-- [ ] Implement `--no-output` dry-run mode
+- [x] Implement stdout streaming: raw PCM when `-o` omitted, `--stdout` with streamable WAV header; verify interop with `ffmpeg`/`sox` (header verified by manual RIFF parse; ffmpeg/sox not installed locally — re-verify in CI)
+- [x] Implement `--no-output` dry-run mode
 - [ ] Define and document exit codes (0 success, non-zero documented failures)
 - [ ] Unit tests: device enumeration, WAV writer header correctness, argument parsing
 

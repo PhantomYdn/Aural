@@ -42,6 +42,15 @@ struct Record: ParsableCommand {
         "Stop recording after this many seconds.", valueName: "sec"))
     var duration: Double?
 
+    @Flag(name: .customLong("stdout"), help: """
+        Stream a WAV container to stdout (unknown-length header). \
+        Without this flag and without -o, raw headerless PCM is piped.
+        """)
+    var wavToStdout = false
+
+    @Flag(name: .customLong("no-output"), help: "Capture but write nothing (dry run).")
+    var noOutput = false
+
     @OptionGroup var options: GlobalOptions
 
     func validate() throws {
@@ -57,8 +66,14 @@ struct Record: ParsableCommand {
         if let duration, duration <= 0 {
             throw ValidationError("--duration must be positive.")
         }
-        guard output != nil else {
-            throw ValidationError("-o/--output is required (stdout streaming lands later in Phase 1).")
+        if output != nil && wavToStdout {
+            throw ValidationError("-o/--output and --stdout are mutually exclusive.")
+        }
+        if output != nil && noOutput {
+            throw ValidationError("-o/--output and --no-output are mutually exclusive.")
+        }
+        if wavToStdout && noOutput {
+            throw ValidationError("--stdout and --no-output are mutually exclusive.")
         }
     }
 
@@ -70,7 +85,9 @@ struct Record: ParsableCommand {
                 rate: rate,
                 bits: bits,
                 channels: channels,
-                duration: duration
+                duration: duration,
+                wavToStdout: wavToStdout,
+                noOutput: noOutput
             ).run()
         }
     }
@@ -85,6 +102,8 @@ struct RecordingSession {
     let bits: Int
     let channels: Int?
     let duration: Double?
+    let wavToStdout: Bool
+    let noOutput: Bool
 
     func run() throws {
         // 1. Resolve the input device.
@@ -102,32 +121,36 @@ struct RecordingSession {
             throw AuralError.noPermission(error.description)
         }
 
-        // 3. Set up the output writer.
-        guard let outputPath else {
-            throw AuralError.usage("output path missing")
-        }
-        let url = URL(fileURLWithPath: outputPath)
-        let writer: WAVFileWriter
-        do {
-            writer = try WAVFileWriter(destination: .file(url), format: format)
-        } catch {
-            throw AuralError.ioError("cannot open output file: \(error)")
-        }
+        // 3. Set up the output sink.
+        let sink = try makeSink(format: format)
+        Log.verbose("destination: \(sink.label)")
 
-        // 4. Capture.
+        // 4. Capture. SIGPIPE is ignored so a closed downstream pipe surfaces
+        // as a write error (EPIPE) and is handled as graceful completion.
+        signal(SIGPIPE, SIG_IGN)
         let session = MicCaptureSession(deviceID: deviceID, outputFormat: format)
         let ioQueue = DispatchQueue(label: "aural.record.io")
         let failure = FailureBox()
         let done = DispatchSemaphore(value: 0)
 
+        // -t/--duration counts captured audio, not wall clock: the budget
+        // trims the final chunk so the output holds exactly the requested
+        // length regardless of engine spin-up latency.
+        let budget = duration.map { seconds in
+            ByteBudget(bytes: UInt64(seconds * Double(format.byteRate)), frameSize: format.bytesPerFrame)
+        }
+
         do {
             try session.start { data in
                 ioQueue.async {
+                    let (chunk, exhausted) = budget?.consume(data) ?? (data, false)
                     do {
-                        try writer.write(data)
+                        if !chunk.isEmpty { try sink.write(chunk) }
                     } catch {
                         if failure.store(error) { done.signal() }
+                        return
                     }
+                    if exhausted { done.signal() }
                 }
             }
         } catch let error as TapEngineError {
@@ -135,31 +158,66 @@ struct RecordingSession {
         }
         Log.verbose("recording started (hardware: \(session.hardwareFormatDescription))")
 
-        // 5. Wait for duration elapse, Ctrl+C/SIGTERM, or a write failure.
+        // 5. Wait for the duration budget, Ctrl+C/SIGTERM, or a write failure.
         let watcher = SignalWatcher()
         watcher.watch([SIGINT, SIGTERM]) {
             Log.verbose("signal received, stopping")
             done.signal()
         }
         let startedAt = Date()
-        if let duration {
-            _ = done.wait(timeout: .now() + duration)
-        } else {
-            done.wait()
-        }
+        done.wait()
         watcher.cancel()
 
         // 6. Tear down: stop capture, drain pending writes, finalize header.
         session.stop()
         ioQueue.sync {}
-        try? writer.finalize()
+        try? sink.finalize()
 
         if let error = failure.take() {
-            throw AuralError.ioError("write failed: \(error)")
+            if isBrokenPipe(error) {
+                Log.verbose("downstream pipe closed, stopping")
+            } else {
+                throw AuralError.ioError("write failed: \(error)")
+            }
         }
         let elapsed = Date().timeIntervalSince(startedAt)
         Log.verbose(
-            "wrote \(writer.bytesWritten) bytes (\(String(format: "%.1f", elapsed)) s) to \(url.path)")
+            "wrote \(sink.bytesWritten) bytes (\(String(format: "%.1f", elapsed)) s) to \(sink.label)")
+    }
+
+    /// Builds the output sink from the flag combination:
+    /// -o FILE -> WAV file; --stdout -> WAV stream; --no-output -> discard;
+    /// none -> raw PCM to stdout (refused on a terminal).
+    private func makeSink(format: PCMFormat) throws -> AudioSink {
+        if noOutput {
+            return DiscardSink()
+        }
+        if let outputPath {
+            let url = URL(fileURLWithPath: outputPath)
+            do {
+                let writer = try WAVFileWriter(destination: .file(url), format: format)
+                return WAVSink(writer: writer, label: url.path)
+            } catch {
+                throw AuralError.ioError("cannot open output file: \(error)")
+            }
+        }
+        if wavToStdout {
+            let writer: WAVFileWriter
+            do {
+                writer = try WAVFileWriter(
+                    destination: .stream(.standardOutput), format: format)
+            } catch {
+                throw AuralError.ioError("cannot write WAV header to stdout: \(error)")
+            }
+            return WAVSink(writer: writer, label: "stdout (wav stream)")
+        }
+        guard isatty(STDOUT_FILENO) == 0 else {
+            throw AuralError.usage("""
+                refusing to write raw audio to a terminal. Pipe stdout, \
+                use --stdout for a WAV stream, or -o FILE for a file.
+                """)
+        }
+        return RawStreamSink(handle: .standardOutput, label: "stdout (raw pcm)")
     }
 
     private func resolveInputDevice() throws -> AudioDevice {
@@ -190,6 +248,33 @@ struct RecordingSession {
         } catch {
             throw AuralError.noInput("no default input device available (\(error))")
         }
+    }
+}
+
+/// Frame-aligned byte budget for exact-duration capture.
+final class ByteBudget: @unchecked Sendable {
+    private let lock = NSLock()
+    private var remaining: UInt64
+
+    init(bytes: UInt64, frameSize: Int) {
+        // Round down to a whole frame so trimming never splits a frame.
+        let frame = UInt64(max(1, frameSize))
+        self.remaining = bytes - (bytes % frame)
+    }
+
+    /// Returns the portion of `data` that fits the budget and whether the
+    /// budget is now exhausted.
+    func consume(_ data: Data) -> (chunk: Data, exhausted: Bool) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard remaining > 0 else { return (Data(), true) }
+        if UInt64(data.count) <= remaining {
+            remaining -= UInt64(data.count)
+            return (data, remaining == 0)
+        }
+        let chunk = data.prefix(Int(remaining))
+        remaining = 0
+        return (Data(chunk), true)
     }
 }
 
