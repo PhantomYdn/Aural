@@ -18,8 +18,8 @@
 - [x] Implement SIGINT/SIGTERM handling: finalise WAV header so file remains playable (PRD §7 Reliability)
 - [x] Implement stdout streaming: raw PCM when `-o` omitted, `--stdout` with streamable WAV header; verify interop with `ffmpeg`/`sox` (header verified by manual RIFF parse; ffmpeg/sox not installed locally — re-verify in CI)
 - [x] Implement `--no-output` dry-run mode
-- [ ] Define and document exit codes (0 success, non-zero documented failures)
-- [ ] Unit tests: device enumeration, WAV writer header correctness, argument parsing
+- [x] Define and document exit codes (0 success, non-zero documented failures)
+- [x] Unit tests: device enumeration, WAV writer header correctness, argument parsing
 
 ## Phase 2: System & App Audio via Core Audio Taps (PRD M2)
 
