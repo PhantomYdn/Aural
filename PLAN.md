@@ -15,7 +15,7 @@
 - [x] Implement `aural apps`: list running applications capturable via process taps (name, bundle ID, PID)
 - [x] Add `--json` output mode to `devices` and `apps`; exit 0 with empty array when nothing found (US06)
 - [x] Implement mic recording to WAV: default input device fallback, `-d/--device`, `-r/--rate`, `-b/--bits`, `-c/--channels`, `-t/--duration` (US01)
-- [ ] Implement SIGINT/SIGTERM handling: finalise WAV header so file remains playable (PRD §7 Reliability)
+- [x] Implement SIGINT/SIGTERM handling: finalise WAV header so file remains playable (PRD §7 Reliability)
 - [ ] Implement stdout streaming: raw PCM when `-o` omitted, `--stdout` with streamable WAV header; verify interop with `ffmpeg`/`sox`
 - [ ] Implement `--no-output` dry-run mode
 - [ ] Define and document exit codes (0 success, non-zero documented failures)

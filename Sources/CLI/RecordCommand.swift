@@ -135,13 +135,19 @@ struct RecordingSession {
         }
         Log.verbose("recording started (hardware: \(session.hardwareFormatDescription))")
 
-        // 5. Wait for duration elapse or a write failure.
+        // 5. Wait for duration elapse, Ctrl+C/SIGTERM, or a write failure.
+        let watcher = SignalWatcher()
+        watcher.watch([SIGINT, SIGTERM]) {
+            Log.verbose("signal received, stopping")
+            done.signal()
+        }
         let startedAt = Date()
         if let duration {
             _ = done.wait(timeout: .now() + duration)
         } else {
             done.wait()
         }
+        watcher.cancel()
 
         // 6. Tear down: stop capture, drain pending writes, finalize header.
         session.stop()
