@@ -25,8 +25,14 @@ struct Record: ParsableCommand {
     var device: String?
 
     @Option(name: [.short, .long], help: ArgumentHelp(
-        "Output file path (.wav).", valueName: "path"))
+        "Output file path; the extension picks the format (.wav, .m4a, .flac).",
+        valueName: "path"))
     var output: String?
+
+    @Option(name: .customLong("format"), help: ArgumentHelp(
+        "Force the output format (wav, m4a, flac), overriding the file extension.",
+        valueName: "format"))
+    var forcedFormat: String?
 
     @Option(name: [.short, .long], help: ArgumentHelp(
         "Sample rate in Hz.", valueName: "hz"))
@@ -123,6 +129,16 @@ struct Record: ParsableCommand {
             throw ValidationError(
                 "-d/--device selects a microphone; with system/app capture it only applies together with --mix.")
         }
+        if let forcedFormat {
+            guard let parsed = AudioFileFormat(rawValue: forcedFormat.lowercased()) else {
+                let known = AudioFileFormat.allCases.map(\.rawValue).joined(separator: ", ")
+                throw ValidationError("unknown format '\(forcedFormat)' (known: \(known)).")
+            }
+            if (wavToStdout || output == nil) && parsed != .wav && !noOutput {
+                throw ValidationError(
+                    "encoded formats need a seekable file; use -o FILE with --format \(parsed.rawValue).")
+            }
+        }
     }
 
     func run() throws {
@@ -139,7 +155,8 @@ struct Record: ParsableCommand {
                 captureSystem: captureSystem,
                 apps: apps,
                 excludeApps: excludeApps,
-                mix: mix
+                mix: mix,
+                forcedFormat: forcedFormat.flatMap { AudioFileFormat(rawValue: $0.lowercased()) }
             ).run()
         }
     }
@@ -160,6 +177,7 @@ struct RecordingSession {
     let apps: [String]
     let excludeApps: [String]
     let mix: Bool
+    let forcedFormat: AudioFileFormat?
 
     func run() throws {
         // 1. Build the capture session for the requested source.
@@ -259,19 +277,35 @@ struct RecordingSession {
     }
 
     /// Builds the output sink from the flag combination:
-    /// -o FILE -> WAV file; --stdout -> WAV stream; --no-output -> discard;
-    /// none -> raw PCM to stdout (refused on a terminal).
+    /// -o FILE -> file in the detected/forced format; --stdout -> WAV
+    /// stream; --no-output -> discard; none -> raw PCM to stdout (refused
+    /// on a terminal).
     private func makeSink(format: PCMFormat) throws -> AudioSink {
         if noOutput {
             return DiscardSink()
         }
         if let outputPath {
             let url = URL(fileURLWithPath: outputPath)
-            do {
-                let writer = try WAVFileWriter(destination: .file(url), format: format)
-                return WAVSink(writer: writer, label: url.path)
-            } catch {
-                throw AuralError.ioError("cannot open output file: \(error)")
+            let fileFormat = try resolveFileFormat(path: outputPath)
+            switch fileFormat {
+            case .wav:
+                do {
+                    let writer = try WAVFileWriter(destination: .file(url), format: format)
+                    return WAVSink(writer: writer, label: url.path)
+                } catch {
+                    throw AuralError.ioError("cannot open output file: \(error)")
+                }
+            case .m4a, .flac:
+                do {
+                    let writer = try EncodedFileWriter(
+                        url: url, fileFormat: fileFormat, pcmFormat: format)
+                    return EncodedSink(writer: writer, label: "\(url.path) (\(fileFormat.rawValue))")
+                } catch {
+                    throw AuralError.ioError("cannot open output file: \(error)")
+                }
+            case .mp3, .opus:
+                throw AuralError.unavailable(
+                    "\(fileFormat.rawValue) output is not implemented yet (planned; see PLAN.md). Use wav, m4a, or flac.")
             }
         }
         if wavToStdout {
@@ -332,6 +366,15 @@ struct RecordingSession {
             throw AuralError.noPermission(error.description)
         }
         return (MicCaptureSession(deviceID: deviceID, outputFormat: format), format)
+    }
+
+    /// Output format: --format override first, then the file extension.
+    private func resolveFileFormat(path: String) throws -> AudioFileFormat {
+        if let forcedFormat { return forcedFormat }
+        if let detected = AudioFileFormat.detect(fromPath: path) { return detected }
+        let known = AudioFileFormat.allCases.map(\.rawValue).joined(separator: ", ")
+        throw AuralError.usage(
+            "cannot infer format from '\(path)'; use a known extension (\(known)) or --format.")
     }
 
     /// Resolves --system/--app/--exclude-app into a tap scope, or nil for

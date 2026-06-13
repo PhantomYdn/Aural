@@ -25,6 +25,21 @@ final class WAVSink: AudioSink, @unchecked Sendable {
     var bytesWritten: UInt64 { writer.bytesWritten }
 }
 
+/// Encoded file output (M4A/AAC, FLAC) via native CoreAudio encoders.
+final class EncodedSink: AudioSink, @unchecked Sendable {
+    private let writer: EncodedFileWriter
+    let label: String
+
+    init(writer: EncodedFileWriter, label: String) {
+        self.writer = writer
+        self.label = label
+    }
+
+    func write(_ data: Data) throws { try writer.write(data) }
+    func finalize() throws { try writer.finalize() }
+    var bytesWritten: UInt64 { writer.bytesWritten }
+}
+
 /// Headerless PCM to a file handle (default for piped stdout).
 final class RawStreamSink: AudioSink, @unchecked Sendable {
     private let handle: FileHandle

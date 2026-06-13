@@ -19,8 +19,9 @@ public enum TapEngineError: Error, CustomStringConvertible {
         switch self {
         case .microphonePermissionDenied:
             return """
-                microphone access denied. Grant access to your terminal in \
-                System Settings > Privacy & Security > Microphone, then retry.
+                microphone access denied or the permission prompt could not \
+                be answered. Enable your terminal in System Settings > \
+                Privacy & Security > Microphone, then retry.
                 """
         case .systemAudioPermissionDenied(let status):
             return """
@@ -82,18 +83,29 @@ public final class MicCaptureSession: CaptureSession, @unchecked Sendable {
     }
 
     /// Requests microphone permission if needed; throws if denied.
-    public static func ensureMicrophonePermission() throws {
+    ///
+    /// The wait is bounded: for terminal-attributed CLIs macOS sometimes
+    /// cannot display the permission prompt at all, in which case the
+    /// `requestAccess` callback never fires — failing with guidance beats
+    /// hanging forever.
+    public static func ensureMicrophonePermission(timeout: TimeInterval = 30) throws {
         switch AVCaptureDevice.authorizationStatus(for: .audio) {
         case .authorized:
             return
         case .notDetermined:
+            FileHandle.standardError.write(Data("""
+                aural: requesting microphone access — if a permission \
+                prompt appeared, please respond to it…\n
+                """.utf8))
             let semaphore = DispatchSemaphore(value: 0)
             nonisolated(unsafe) var granted = false
             AVCaptureDevice.requestAccess(for: .audio) { ok in
                 granted = ok
                 semaphore.signal()
             }
-            semaphore.wait()
+            guard semaphore.wait(timeout: .now() + timeout) == .success else {
+                throw TapEngineError.microphonePermissionDenied
+            }
             if !granted { throw TapEngineError.microphonePermissionDenied }
         case .denied, .restricted:
             throw TapEngineError.microphonePermissionDenied
