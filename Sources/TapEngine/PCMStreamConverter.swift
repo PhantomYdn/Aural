@@ -8,14 +8,14 @@ import Foundation
 /// Handles sample-rate, bit-width, and channel-count conversion. 16/32-bit
 /// targets convert directly; 24-bit converts to Int32 and packs to 3 bytes.
 /// Stateful across calls (resampler continuity) — feed it one continuous
-/// stream.
-final class PCMStreamConverter {
+/// stream, then `finish()` to drain resampler tail frames.
+public final class PCMStreamConverter {
     private let converter: AVAudioConverter
     private let converterOutputFormat: AVAudioFormat
     private let bitsPerSample: Int
     private let rateRatio: Double
 
-    init(inputFormat: AVAudioFormat, outputFormat: PCMFormat) throws {
+    public init(inputFormat: AVAudioFormat, outputFormat: PCMFormat) throws {
         let commonFormat: AVAudioCommonFormat =
             switch outputFormat.bitsPerSample {
             case 16: .pcmFormatInt16
@@ -40,7 +40,7 @@ final class PCMStreamConverter {
     }
 
     /// Converts one captured buffer; returns nil when nothing was produced.
-    func convert(_ buffer: AVAudioPCMBuffer) -> Data? {
+    public func convert(_ buffer: AVAudioPCMBuffer) -> Data? {
         let capacity = AVAudioFrameCount(Double(buffer.frameLength) * rateRatio) + 64
         guard
             let outBuffer = AVAudioPCMBuffer(
@@ -57,6 +57,23 @@ final class PCMStreamConverter {
             consumed = true
             outStatus.pointee = .haveData
             return buffer
+        }
+        guard status != .error, conversionError == nil, outBuffer.frameLength > 0 else {
+            return nil
+        }
+        return Self.packedData(from: outBuffer, bitsPerSample: bitsPerSample)
+    }
+
+    /// Drains frames still buffered in the resampler (end of stream).
+    public func finish() -> Data? {
+        guard
+            let outBuffer = AVAudioPCMBuffer(
+                pcmFormat: converterOutputFormat, frameCapacity: 8192)
+        else { return nil }
+        var conversionError: NSError?
+        let status = converter.convert(to: outBuffer, error: &conversionError) { _, outStatus in
+            outStatus.pointee = .endOfStream
+            return nil
         }
         guard status != .error, conversionError == nil, outBuffer.frameLength > 0 else {
             return nil
