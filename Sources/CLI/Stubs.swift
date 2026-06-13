@@ -31,16 +31,4 @@ struct Convert: ParsableCommand {
     }
 }
 
-struct Info: ParsableCommand {
-    static let configuration = CommandConfiguration(
-        abstract: "Print duration, format, and metadata of an audio file."
-    )
 
-    @OptionGroup var options: GlobalOptions
-
-    func run() throws {
-        try runMapped(verbose: options.verbose) {
-            throw AuralError.unavailable("'info' is not implemented yet (planned: Phase 3)")
-        }
-    }
-}
