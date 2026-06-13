@@ -2,8 +2,8 @@
 # End-to-end validation of per-app capture isolation (US02 / US07).
 #
 # Plays a 440 Hz tone via afplay (the "target app") and verifies:
-#   1. `aural record --app <afplay-pid>` captures the tone (RMS high)
-#   2. `aural record --exclude-app <afplay-pid>` does not (RMS low)
+#   1. `aural --app <afplay-pid> -a out.wav` captures the tone (RMS high)
+#   2. `aural --exclude-app <afplay-pid> -a out.wav` does not (RMS low)
 #
 # Requirements: System Audio Recording permission granted to the terminal;
 # best run on a quiet system (other apps' audio raises the exclusion RMS).
@@ -46,7 +46,7 @@ echo "== case 1: --app captures the target app"
 afplay -v 0.3 "$WORK/tone.wav" &
 AFPLAY_PID=$!
 sleep 0.8
-"$AURAL" record --app "$AFPLAY_PID" -t 2 -o "$WORK/included.wav"
+"$AURAL" --app "$AFPLAY_PID" --duration 2 -a "$WORK/included.wav"
 kill $AFPLAY_PID 2>/dev/null || true
 wait $AFPLAY_PID 2>/dev/null || true
 INCLUDED_AMP=$(tone_amp "$WORK/included.wav")
@@ -56,7 +56,7 @@ echo "== case 2: --exclude-app suppresses the target app"
 afplay -v 0.3 "$WORK/tone.wav" &
 AFPLAY_PID=$!
 sleep 0.8
-"$AURAL" record --exclude-app "$AFPLAY_PID" -t 2 -o "$WORK/excluded.wav"
+"$AURAL" --exclude-app "$AFPLAY_PID" --duration 2 -a "$WORK/excluded.wav"
 kill $AFPLAY_PID 2>/dev/null || true
 wait $AFPLAY_PID 2>/dev/null || true
 EXCLUDED_AMP=$(tone_amp "$WORK/excluded.wav")

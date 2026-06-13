@@ -5,7 +5,7 @@ TCC. **For command-line tools, macOS attributes permissions to the terminal
 application that launched them** (Terminal, iTerm2, kitty, an IDE, …), not
 to `aural` itself — even though `aural` embeds its own usage descriptions.
 
-## Microphone (`aural record`, `--mix`)
+## Microphone (live capture, `--mix`)
 
 Service: `kTCCServiceMicrophone`.
 

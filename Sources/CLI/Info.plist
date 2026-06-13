@@ -9,8 +9,8 @@
     <key>CFBundleShortVersionString</key>
     <string>0.1.0</string>
     <key>NSMicrophoneUsageDescription</key>
-    <string>Aural records audio from your microphone when you run 'aural record'.</string>
+    <string>Aural records audio from your microphone when you run 'aural'.</string>
     <key>NSAudioCaptureUsageDescription</key>
-    <string>Aural captures system and per-application audio when you run 'aural record --system' or '--app'.</string>
+    <string>Aural captures system and per-application audio when you run 'aural --system' or '--app'.</string>
 </dict>
 </plist>

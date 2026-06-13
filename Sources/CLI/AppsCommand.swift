@@ -7,7 +7,7 @@ struct Apps: ParsableCommand {
         abstract: "List running applications whose audio can be captured.",
         discussion: """
             Lists processes registered with the audio HAL. These are valid \
-            targets for per-application capture (aural record --app). The \
+            targets for per-application capture (aural --app). The \
             ACTIVE column shows which processes are currently playing or \
             recording audio.
             """

@@ -23,7 +23,7 @@ The tool strictly follows Unix/Linux design patterns, treating audio as a stream
 | Provide a Unix-compatible interface that integrates with standard pipes, redirections, and signal handling | All audio data can be streamed via stdout; the CLI responds to SIGINT/SIGTERM by gracefully closing the output file |
 | Simplify the transcription pipeline | Output files (WAV, M4A, FLAC, MP3, Opus) can be directly fed to `whisper.cpp`, Fabric AI, or cloud-based transcription services without extra conversion |
 | Minimise dependencies and footprint | The tool is shipped as a single Swift binary requiring only macOS baseline frameworks (CoreAudio, AudioToolbox, AVFoundation); no third-party audio driver installation |
-| Follow the "do one thing well" philosophy | Each CLI command performs exactly one task (list devices, list apps, record, convert, etc.); complex workflows are built by chaining these commands |
+| Follow the "do one thing well" philosophy | The root verb captures/transcribes/transcodes via composable flags; small utility subcommands inspect the environment (list devices, list apps, file info); complex workflows are built by chaining invocations through stdin/stdout |
 
 ---
 
@@ -46,11 +46,12 @@ The tool strictly follows Unix/Linux design patterns, treating audio as a stream
 | 2 | Audio capture from any single source | P0 | Record from a specified input device (built-in microphone, USB headset). Configurable sample rate, bit-depth, and channel count. Falls back to default input device. |
 | 3 | System & per-app audio capture (Core Audio taps) | P0 | Capture all system audio (`--system`), specific application(s) (`--app`, repeatable), or everything except listed apps (`--exclude-app`). Mixed mic + system capture via `--mix`. |
 | 4 | File output — native formats | P0 | Save to WAV (PCM), M4A/AAC, or FLAC using native CoreAudio encoders. |
-| 5 | Stream-mode operation | P0 | Output raw audio samples to stdout (e.g., `aural record | ffmpeg ...`); accept audio from stdin for transcoding/transcription. |
+| 5 | Stream-mode operation | P0 | Stream a WAV container to stdout with `-a -` (e.g., `aural -a - \| ffmpeg ...`), or headerless PCM with `--raw`; accept audio from stdin (`-i -`) for transcoding/transcription. |
 | 6 | Signal handling & graceful shutdown | P0 | On SIGINT (Ctrl+C) or SIGTERM, finalise the output file header so it remains playable. |
 | 7 | File output — additional formats | P1 | MP3 (statically linked LAME) and Ogg/Opus (statically linked libopus/libogg). All output formats verified compatible with major transcription tools (whisper.cpp, Fabric AI, cloud APIs). |
 | 8 | Time-based chunking | P1 | Split recordings into sequential files by duration (`--split duration=SEC`). |
-| 9 | Transcription integration | P1 | `transcribe` sub-command that pipes recorded audio directly to a local transcription engine (e.g., `whisper.cpp`), avoiding temporary files when desired. |
+| 9 | Transcription integration | P1 | Transcription is built into the root verb: any input (live capture or `-i` file/stream) can be transcribed by a local engine (e.g., `whisper.cpp`) via `-t/--transcript`. Audio and transcript can be produced in the same run (`-a rec.m4a -t notes.srt`); naming no output transcribes to stdout. |
+| 12 | Live transcription | P1 | During live capture, emit the transcript incrementally — as close to runtime as possible — by segmenting the stream on natural pauses and transcribing each segment as it completes (true streaming is post-MVP). |
 | 10 | Silence-based splitting | P2 | Split on continuous silence exceeding a configurable threshold (`--split silence=SEC`). |
 | 11 | Basic metadata embedding | P2 | Store recording start time, source name, and sample rate in WAV INFO, MP4, or ID3 tags. |
 
@@ -69,9 +70,9 @@ The tool strictly follows Unix/Linux design patterns, treating audio as a stream
 ## 5. User Stories
 
 ### US01 — Quick voice notes
-As a **developer**, I want to quickly capture my microphone input for five minutes and save it as an MP3, so that I can review my spoken notes later without opening Audacity.
+As a **developer**, I want to quickly capture my microphone input for five minutes and save it to a file, so that I can review my spoken notes later without opening Audacity.
 - Acceptance Criteria:
-  - [ ] `aural record -t 300 -o notes.mp3` records from the default input device without specifying a device UID
+  - [ ] `aural -a notes.m4a --duration 300` records from the default input device without specifying a device UID (and writes no transcript, since only `-a` is named)
   - [ ] Recording stops automatically after 300 seconds with exit code 0
   - [ ] Resulting file plays correctly in QuickTime/`afplay` and duration is 300 s ± 1 s
 
@@ -79,21 +80,21 @@ As a **developer**, I want to quickly capture my microphone input for five minut
 As a **developer**, I want to record the audio from an ongoing Zoom call without echoing my own voice, so that I can later transcribe the meeting and extract action items.
 - Acceptance Criteria:
   - [ ] `aural apps` lists the running Zoom process with its bundle ID
-  - [ ] `aural record --app us.zoom.xos -o call.m4a` captures only Zoom's output audio
+  - [ ] `aural --app us.zoom.xos -a call.m4a` captures only Zoom's output audio
   - [ ] The user's own microphone is not captured unless `--mix` is explicitly given
   - [ ] First-run macOS "System Audio Recording" permission prompt and approval flow is documented
 
 ### US03 — Zero-touch transcription pipeline
-As a **data engineer**, I want to pipe recorded audio directly to a speech-to-text engine, so that I can build a fully automated transcription pipeline with zero manual steps.
+As a **data engineer**, I want to capture audio and get a transcript with zero manual steps, so that I can build a fully automated transcription pipeline.
 - Acceptance Criteria:
-  - [ ] `aural record -t 60 --stdout | aural transcribe -i -` produces transcript text on stdout
-  - [ ] No temporary files are created in stream mode
+  - [ ] `aural --duration 60 -t -` captures from the default mic and produces transcript text on stdout in one step
+  - [ ] The equivalent pipeline `aural -a - --duration 60 | aural -i -` produces the same transcript text on stdout
   - [ ] A failure in the transcription engine propagates a non-zero exit code through the pipeline
 
 ### US04 — Manageable chunks
 As a **power user**, I want to split a long recording into chunks based on silence, so that I can easily manage large audio files and focus on important segments.
 - Acceptance Criteria:
-  - [ ] `--split silence=1.5` produces sequentially numbered files (`name_001.wav`, `name_002.wav`, …)
+  - [ ] `aural --split silence=1.5 -a name.wav` produces sequentially numbered files (`name_001.wav`, `name_002.wav`, …)
   - [ ] Each chunk is independently playable with a valid, finalised header
   - [ ] The silence detection threshold (dBFS) is configurable
 
@@ -124,8 +125,52 @@ As a **developer**, I want to capture audio from one specific app while excludin
 
 ### 6.1 CLI Commands & Flags
 
+`aural` itself is the verb — "listen and transcribe." It takes one input (live capture by default, or an existing file/stream via `-i`) and writes the outputs you name. Three utility subcommands remain for inspection.
+
 ```
-aural {devices|apps|record|transcribe|convert|info} [OPTIONS]
+aural [INPUT] [OUTPUTS] [OPTIONS]      # capture / transcribe / convert
+aural devices | apps | info            # inspection utilities
+```
+
+**Input — pick one (default: system default microphone):**
+- *(no flag)* : live capture from the default input device.
+- `-d, --device UID` : live capture from a specific input device.
+- `--system` : live capture of all system audio via a process tap.
+- `--app ID` : live capture of a specific application (bundle ID or PID; repeatable).
+- `--exclude-app ID` : live capture of all system audio except the listed application(s) (repeatable).
+- `--mix` : additionally mix the microphone (default or `-d` device) into a system/app capture.
+- `-i, --input PATH|"-"` : read an existing audio file, or `-` for stdin, instead of live capture. Mutually exclusive with the live flags above.
+
+**Outputs — name what you want to keep; `-` means stdout:**
+- `-a, --audio PATH|"-"` : write audio. The file extension picks the format (`.wav`, `.m4a`, `.flac`); `-` streams a WAV container to stdout.
+- `-t, --transcript PATH|"-"` : write a transcript. The file extension picks the format (`.txt`, `.srt`, `.json`); `-` writes text to stdout.
+- *(no output flag)* : transcribe to stdout (the default verb).
+- At most one output may be `-` — stdout carries a single stream.
+
+**Capture format & timing (live capture):**
+- `-r, --rate Hz` : sample rate (live default 44100; file convert defaults to the source rate).
+- `-b, --bits 16|24|32` : bit depth (live default 16; convert defaults to the source depth).
+- `-c, --channels 1|2` : channel count (default based on the source, capped at 2).
+- `--duration SEC` : stop live capture after SEC seconds (otherwise Ctrl+C).
+- `--split duration=SEC` / `--split silence=SEC` : split the audio file into sequentially numbered chunks (requires `-a FILE`; silence threshold via `--silence-threshold` dBFS).
+
+**Format overrides & transcription engine:**
+- `--format wav|m4a|flac` : force the audio format, overriding the extension.
+- `--transcript-format txt|srt|json` : force the transcript format, overriding the extension.
+- `-e, --engine whisper|cloud` : transcription engine (default `whisper`; cloud is post-MVP).
+- `--model PATH` : ggml Whisper model (default `$AURAL_WHISPER_MODEL`).
+- `--language CODE` : spoken language (default: the model's default).
+- `--raw` : with `-a -`, stream headerless raw PCM to stdout instead of a WAV container.
+
+**Examples:**
+```
+aural                                       # live mic, transcript -> stdout
+aural -i recording.m4a                       # transcribe a file -> stdout
+aural -a rec.m4a                             # record only (no transcription)
+aural -a rec.m4a -t notes.txt                # record + transcribe to files
+aural --system --mix -a mtg.m4a -t mtg.srt   # capture a meeting, keep both
+aural -i in.wav -a out.m4a                   # convert between formats
+aural -a - | ffmpeg -i - ...                 # stream WAV into a pipe
 ```
 
 **`aural devices`**
@@ -137,54 +182,26 @@ aural {devices|apps|record|transcribe|convert|info} [OPTIONS]
 - Output: application name, bundle ID, PID.
 - `--json` : output in JSON for scripting.
 
-**`aural record [SOURCE] -o <output_file> [OPTIONS]`**
-
-Source selection (exactly one mode; mic capture is the default):
-- `-d, --device UID` : input device UID (defaults to system default input).
-- `--system` : capture all system audio via a global process tap.
-- `--app ID` : capture a specific application's audio by bundle ID or PID (repeatable).
-- `--exclude-app ID` : capture all system audio except the listed application(s) (repeatable).
-- `--mix` : additionally mix the microphone (default or `-d` device) into a system/app capture.
-
-Output & format:
-- `-o, --output PATH` : output file path; extension determines format (`.wav`, `.m4a`, `.flac`, `.mp3`, `.opus`). If omitted, output to stdout.
-- `--format f` : force format `wav`, `m4a`, `flac`, `mp3`, `opus`.
-- `-r, --rate Hz` : sample rate (default 44100).
-- `-b, --bits 16|24|32` (default 16).
-- `-c, --channels 1|2` (default based on source).
-- `-t, --duration SEC` : stop recording after SEC seconds.
-- `--split duration=SEC` : start a new file every SEC seconds (filename with sequence).
-- `--split silence=SEC` : split on silence exceeding SEC seconds (configurable dBFS threshold).
-- `--no-output` : run in "dry-run" mode, no file written (useful for testing).
-- `--stdout` : force raw PCM output to stdout (implied if no `-o`).
-
-**`aural transcribe -i <input_file|-|source> [OPTIONS]`**
-- `-i, --input PATH|"-"|UID` : file path, `-` for stdin, or a device UID to capture and transcribe on the fly.
-- `-e, --engine whisper|cloud` : transcription engine (default `whisper`).
-- `--model PATH` : path to Whisper model.
-- `--language en` : specify language.
-- `--output-format txt|srt|json` : transcription output format.
-- Integration: if a device UID is given, record in memory, pipe to engine, output text to stdout.
-
-**`aural convert -i <input> -o <output> [OPTIONS]`**
-- Simple format conversion (WAV → M4A, FLAC → MP3, etc.) reusing CoreAudio codecs where available.
-
-**`aural info -i <input>`**
+**`aural info <file>`**
 - Print duration, sample rate, channels, and metadata of an audio file.
+- `--json` : output in JSON for scripting.
 
-All commands accept `-h, --help` and `-v, --verbose`.
+All invocations accept `-h, --help` and `-v, --verbose`.
+
+> **Note on the root verb.** `aural` with no arguments starts live microphone capture and prints a transcript to stdout; full usage is available via `aural --help`. Naming no output transcribes to stdout, so the default behaviour matches the product's one-line description. Transcoding (`aural -i in -a out`) replaces the former `convert` subcommand, which has been removed.
 
 ### 6.2 Source Handling
 
 - Use CoreAudio APIs to enumerate AudioDeviceIDs; automatically exclude inactive devices.
 - Use Core Audio process taps (`CATapDescription` / `AudioHardwareCreateProcessTap`, macOS 14.4+) for system and per-app capture; no virtual audio driver required.
-- Tap lifecycle: taps are created at recording start and destroyed on stop; if a tapped application quits mid-recording, the recording finalises cleanly and reports it on stderr.
-- Fallback to default input device when no source flag is given with `record`.
+- Tap lifecycle: taps are created at capture start and destroyed on stop; if a tapped application quits mid-capture, the capture finalises cleanly and reports it on stderr.
+- Fallback to the default input device when no source flag is given.
 
 ### 6.3 Streaming & Pipes
 
-- `record` without `-o` outputs raw 16-bit PCM (WAV header when piped to file) or a streamable WAV container (if `--stdout` is used with header). The stream must play nicely with `ffmpeg`, `sox`, and other tools.
-- `transcribe` with `-i -` reads raw audio from stdin, handling on-the-fly transcription.
+- `-a -` streams a self-describing WAV container to stdout (unknown-length header); `--raw` switches it to headerless 16-bit PCM. The stream must play nicely with `ffmpeg`, `sox`, and other tools.
+- `-i -` reads audio from stdin (a WAV stream is auto-detected; raw PCM is interpreted with `--input-rate/-bits/-channels`) for transcoding and/or transcription.
+- Exactly one output may target stdout; the tool refuses combinations that would interleave two streams on stdout.
 - Exit code 0 on success, non-zero on failure (explicit error codes documented).
 
 ### 6.4 Format Support
@@ -203,9 +220,12 @@ All commands accept `-h, --help` and `-v, --verbose`.
 
 ### 6.6 Transcription Integration
 
-- When using `transcribe` with a source, the audio capture runs synchronously; transcription begins after recording ends, or in streaming mode if engine supports it (v1 does not require streaming transcription, just batch post-processing).
-- If `--engine whisper`, call the system-installed `whisper` binary; if not found, provide a clear error message with installation instructions (e.g., `brew install whisper-cpp`).
-- STDERR from the transcription engine is passed through for debugging.
+- Transcription is requested with `-t/--transcript` (or implied when no output flag is given). It applies uniformly to file input (`-i`), stdin (`-i -`), and live capture.
+- Input is normalised internally to 16 kHz mono 16-bit WAV (the whisper.cpp requirement) before the engine runs; any readable input format is therefore accepted without prior conversion.
+- For live capture, transcription should run as close to runtime as possible: the stream is segmented on natural pauses (with a maximum-window cap) and each segment is transcribed as it completes, appending to the destination. True streaming transcription is post-MVP; batch (transcribe-at-end) is the minimum acceptable behaviour for v1.
+- When both `-a` and `-t` are given, audio and transcript are produced in the same capture pass.
+- If `--engine whisper`, call a system-installed whisper.cpp binary (`whisper-cli`/`whisper-cpp` on `PATH`, or `$AURAL_WHISPER_BIN`); if not found, provide a clear error with installation instructions (e.g., `brew install whisper-cpp`). The model comes from `--model` or `$AURAL_WHISPER_MODEL`.
+- STDERR from the transcription engine is passed through for debugging; a non-zero engine exit code propagates through the pipeline.
 
 ---
 
@@ -239,8 +259,8 @@ All commands accept `-h, --help` and `-v, --verbose`.
 |-----------|--------------|--------|--------------|
 | **M1 – Core Capture** | Swift/SwiftPM project skeleton, device & app enumeration (`devices`, `apps`), mic recording to WAV, signal handling, stdout streaming | Week 1–2 | — |
 | **M2 – System Audio** | Core Audio process taps: `--system`, `--app`, `--exclude-app`, `--mix`; TCC permission flow & docs | Week 3–4 | M1 |
-| **M3 – Formats & Chunking** | M4A/FLAC output, MP3/Opus (static libs), time-based splitting, `convert` command | Week 5–6 | M1 |
-| **M4 – Transcription MVP** | `transcribe` sub-command with local Whisper support; stdin/file/source input | Week 7 | M3 |
+| **M3 – Formats & Chunking** | M4A/FLAC output, MP3/Opus (static libs), time-based splitting, transcoding via `-i in -a out` | Week 5–6 | M1 |
+| **M4 – Transcription MVP** | Root-verb transcription with local Whisper support; stdin/file/live input; combined `-a`+`-t` | Week 7 | M3 |
 | **M5 – Polish & Release** | Code signing & notarization, Homebrew formula, man page, example scripts, CI/CD, public beta | Week 8–9 | M2, M3, M4 |
 | **Post-MVP** | Daemon mode (launchd scheduled recording), silence VAD, streaming transcription, cloud backends, configuration profiles | Ongoing | M5 |
 

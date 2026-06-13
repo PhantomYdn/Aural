@@ -22,7 +22,7 @@ struct Info: ParsableCommand {
         discussion: "Reads WAV, AIFF, CAF, M4A, FLAC, and MP3 files."
     )
 
-    @Option(name: [.short, .long], help: ArgumentHelp(
+    @Argument(help: ArgumentHelp(
         "Audio file to inspect.", valueName: "path"))
     var input: String
 

@@ -49,13 +49,16 @@
 
 ### Pending live verification (capture permissions were reset mid-session; needs GUI access)
 
+> Commands updated to the unified root-verb syntax (see Phase 4.5).
+
 - [ ] Re-grant TCC: Microphone for the terminal (System Settings → Privacy & Security → Microphone) and System Audio Recording (Screen & System Audio Recording → "+" → terminal, restart terminal)
-- [ ] `aural record -t 2 -o x.m4a` and `x.flac` — live encoded capture (afinfo check)
-- [ ] `aural record -t 5 --split duration=2 -o x.wav` — 3 chunks, each playable
+- [ ] `aural --duration 2 -a x.m4a` and `x.flac` — live encoded capture (afinfo check)
+- [ ] `aural --duration 5 --split duration=2 -a x.wav` — 3 chunks, each playable
 - [ ] Live `--split silence` smoke with real audio
 - [ ] Re-run `Scripts/e2e-app-isolation.sh` (should still pass)
-- [ ] `aural record -t 10 --stdout | aural transcribe -i -` — the literal US03 mic pipeline
-- [ ] `aural transcribe -i <mic-UID> -t 5` while speaking — device capture mode
+- [ ] `aural -a - --duration 10 | aural -i -` — the literal US03 mic pipeline
+- [ ] `aural -d <mic-UID> --duration 5 -t -` while speaking — live mic → transcript on stdout
+- [ ] `aural --duration 5 -a x.m4a -t x.srt` while speaking — combined record + transcribe in one pass
 
 ## Phase 4: Transcription Pipeline (PRD M4)
 
@@ -63,10 +66,38 @@
 - [x] Implement `-i -` stdin mode: read raw audio from stdin (WAV-stream sniffing + raw PCM flags); staged via temp file internally (US03)
 - [x] Implement source input mode: record from device UID in memory, pipe to engine, output text to stdout — live mic check pending TCC re-grant
 - [x] Implement `--engine whisper` (default): invoke system-installed whisper binary (`whisper-cli`/`whisper-cpp` on PATH, `AURAL_WHISPER_BIN` override)
-- [x] Implement `--model`, `--language`, `--output-format txt|srt|json` flags (model fallback: `$AURAL_WHISPER_MODEL`)
+- [x] Implement `--model`, `--language`, `--output-format txt|srt|json` flags (model fallback: `$AURAL_WHISPER_MODEL`) — note: `--output-format` renamed `--transcript-format` in the Phase 4.5 redesign
 - [x] Missing-engine UX: clear error with installation instructions (`brew install whisper-cpp`) (PRD §6.6); missing model gets a HuggingFace download line
 - [x] Pass engine STDERR through for debugging; propagate non-zero exit codes through pipelines (US03) — verified: whisper exit 3 propagated
 - [x] End-to-end test: pipe-to-transcript verified permission-free via Scripts/e2e-transcribe.sh (say-synthesized speech; WAV + raw-PCM pipes); the literal mic variant `record --stdout | transcribe -i -` is on the pending-live list
+
+## Phase 4.5: Unified Root Verb — CLI Redesign (PRD §6.1, §6.6)
+
+> `aural` itself becomes the verb ("listen and transcribe"). One input (live by
+> default, or `-i FILE/-`), outputs you name (`-a` audio, `-t` transcript, `-` =
+> stdout); naming none transcribes to stdout. The `record`, `transcribe`, and
+> `convert` subcommands are removed; `devices`/`apps`/`info` remain.
+
+### Change 1 — Restructure + docs (parser, engines, doc sweep)
+
+- [x] Root command with input/output flag groups; `record`/`transcribe`/`convert` folded in and removed
+- [x] Extract `CaptureEngine` (multi-sink live capture core) and `TranscribeEngine` (normalize → whisper → transcript write; stdin staging)
+- [x] Default-output rule: name none → `-t -`; `-a -` → WAV stream; `--raw -a -` → headerless PCM; `--no-output` hidden dry-run
+- [x] Validation: one input mode (`-i` ⊥ live flags), ≤1 stdout, `--split` needs `-a FILE`, `--raw` needs `-a -`, `--duration`/`--split` live-only
+- [x] `-t` repurposed to `--transcript`; duration moved to long-only `--duration`; `--output-format` → `--transcript-format`
+- [x] Transcoding via `-i in -a out` replaces `convert`; combined `-a`+`-t` in one pass
+- [x] `info` takes a positional `<file>` (frees `-i` for the root's input flag)
+- [x] Update parser/output-resolution tests (`make test` green — 80 tests, 23 suites)
+- [x] Doc sweep: PRD §6.1/§6.3/§6.6 + FR table + US01–US04; scripts, docs/permissions.md, help strings
+- [x] Verified offline: convert roundtrips, file/stdin/both transcription, `-a - | -i -` pipeline (whisper.cpp + base.en)
+
+### Change 2 — Near-runtime live transcription (follow-up)
+
+- [ ] `TranscriptSink` (file + stdout, live-append) parallel to `AudioSink`; `.srt` cumulative cues, `.json` JSON-lines in live mode
+- [ ] `LiveTranscriber`: tee live capture → audio sink + silence/max-window segmenter → per-segment whisper → live append
+- [ ] Wire live transcription into the root `runLiveInput` path (replaces batch-at-end when transcript requested)
+- [ ] Follow-up: persistent whisper process to avoid per-segment model reload (perf optimization)
+- [ ] Live e2e via `say`/`afplay` (permission-free) extending `Scripts/e2e-transcribe.sh`
 
 ## Phase 5: Release Engineering & Public Beta (PRD M5)
 

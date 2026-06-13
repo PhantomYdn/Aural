@@ -5,66 +5,140 @@ import Testing
 
 @testable import CLI
 
-@Suite("Record argument parsing")
-struct RecordParsingTests {
+@Suite("Root argument parsing")
+struct RootParsingTests {
     @Test func defaults() throws {
-        let record = try Record.parse(["-o", "out.wav"])
-        #expect(record.rate == 44100)
-        #expect(record.bits == 16)
-        #expect(record.channels == nil)
-        #expect(record.duration == nil)
-        #expect(record.device == nil)
-        #expect(!record.wavToStdout)
-        #expect(!record.noOutput)
+        let aural = try Aural.parse([])
+        #expect(aural.input == nil)
+        #expect(aural.device == nil)
+        #expect(aural.audio == nil)
+        #expect(aural.transcript == nil)
+        #expect(aural.rate == nil)
+        #expect(aural.bits == nil)
+        #expect(aural.channels == nil)
+        #expect(aural.duration == nil)
+        #expect(!aural.raw)
+        #expect(!aural.noOutput)
+        #expect(aural.engine == "whisper")
     }
 
     @Test func parsesAllOptions() throws {
-        let record = try Record.parse([
-            "-d", "SomeUID", "-o", "x.wav", "-r", "48000", "-b", "24", "-c", "2", "-t", "30.5",
+        let aural = try Aural.parse([
+            "-d", "SomeUID", "-a", "x.wav", "-t", "x.srt",
+            "-r", "48000", "-b", "24", "-c", "2", "--duration", "30.5",
         ])
-        #expect(record.device == "SomeUID")
-        #expect(record.output == "x.wav")
-        #expect(record.rate == 48000)
-        #expect(record.bits == 24)
-        #expect(record.channels == 2)
-        #expect(record.duration == 30.5)
+        #expect(aural.device == "SomeUID")
+        #expect(aural.audio == "x.wav")
+        #expect(aural.transcript == "x.srt")
+        #expect(aural.rate == 48000)
+        #expect(aural.bits == 24)
+        #expect(aural.channels == 2)
+        #expect(aural.duration == 30.5)
     }
 
     @Test(arguments: [
-        ["-o", "x.wav", "-b", "12"],          // bad bit depth
-        ["-o", "x.wav", "-c", "3"],           // bad channel count
-        ["-o", "x.wav", "-t", "0"],           // non-positive duration
-        ["-o", "x.wav", "-r", "0"],           // bad rate
-        ["-o", "x.wav", "--stdout"],          // -o conflicts with --stdout
-        ["-o", "x.wav", "--no-output"],       // -o conflicts with --no-output
-        ["--stdout", "--no-output"],          // stream conflicts with dry run
-        ["-o", "x.wav", "--system", "--app", "foo"],         // system is everything
-        ["-o", "x.wav", "--app", "a", "--exclude-app", "b"],  // include vs exclude
-        ["-o", "x.wav", "--mix"],                             // mix needs a tap mode
-        ["-o", "x.wav", "--system", "-d", "UID"],             // device needs --mix
+        ["-a", "x.wav", "-b", "12"],          // bad bit depth
+        ["-a", "x.wav", "-c", "3"],           // bad channel count
+        ["--duration", "0"],                   // non-positive duration
+        ["-a", "x.wav", "-r", "0"],           // bad rate
+        ["-a", "-", "-t", "-"],               // two outputs cannot share stdout
+        ["--raw", "-a", "x.wav"],             // --raw requires -a -
+        ["--no-output", "-a", "x.wav"],       // dry run conflicts with an output
+        ["-i", "f.wav", "--system"],          // -i excludes live flags
+        ["-i", "f.wav", "--duration", "5"],   // duration is live-only
+        ["-i", "f.wav", "--split", "duration=2"],  // split is live-only
+        ["--system", "--app", "foo"],          // system is everything
+        ["--app", "a", "--exclude-app", "b"],  // include vs exclude
+        ["--mix"],                             // mix needs a tap mode
+        ["--system", "-d", "UID"],             // device needs --mix
+        ["--split", "duration=2", "-a", "-"],  // split needs a file
+        ["--split", "duration=2"],             // split needs an audio output
+        ["-e", "bogus"],                        // unknown engine
     ])
     func rejectsInvalidCombinations(_ arguments: [String]) {
         #expect(throws: (any Error).self) {
-            _ = try Record.parse(arguments)
+            _ = try Aural.parse(arguments)
         }
     }
 
     @Test(arguments: [
-        ["-o", "x.wav", "--system"],
-        ["-o", "x.wav", "--system", "--mix"],
-        ["-o", "x.wav", "--system", "--mix", "-d", "SomeUID"],
-        ["-o", "x.wav", "--app", "com.example.app", "--app", "123"],
-        ["-o", "x.wav", "--app", "123", "--mix"],
-        ["-o", "x.wav", "--exclude-app", "com.example.app"],
+        [],                                     // bare: live mic -> transcript
+        ["-a", "rec.m4a"],                      // record only
+        ["-a", "rec.m4a", "-t", "notes.txt"],   // record + transcribe
+        ["-a", "-"],                            // WAV stream to stdout
+        ["--raw", "-a", "-"],                   // raw PCM to stdout
+        ["-i", "in.mp3"],                       // transcribe a file
+        ["-i", "in.wav", "-a", "out.m4a"],      // convert
+        ["--system", "--mix", "-a", "m.m4a", "-t", "m.srt"],
+        ["--system", "--mix", "-d", "SomeUID"],
+        ["--app", "com.example.app", "--app", "123"],
+        ["--exclude-app", "com.example.app"],
     ])
-    func acceptsTapModeCombinations(_ arguments: [String]) throws {
-        _ = try Record.parse(arguments)
+    func acceptsValidCombinations(_ arguments: [String]) throws {
+        _ = try Aural.parse(arguments)
     }
 
     @Test func repeatableAppFlagAccumulates() throws {
-        let record = try Record.parse(
-            ["-o", "x.wav", "--app", "com.a", "--app", "com.b", "--app", "42"])
-        #expect(record.apps == ["com.a", "com.b", "42"])
+        let aural = try Aural.parse(
+            ["--app", "com.a", "--app", "com.b", "--app", "42"])
+        #expect(aural.apps == ["com.a", "com.b", "42"])
+    }
+}
+
+@Suite("Output resolution")
+struct OutputResolutionTests {
+    /// Naming no output transcribes to stdout (the default verb).
+    @Test func defaultIsTranscriptToStdout() throws {
+        let outputs = try Aural.parse([]).resolveOutputs()
+        #expect(outputs.audio == nil)
+        guard case .stdout = outputs.transcript else {
+            Issue.record("expected transcript -> stdout")
+            return
+        }
+    }
+
+    @Test func audioOnlyHasNoTranscript() throws {
+        let outputs = try Aural.parse(["-a", "rec.m4a"]).resolveOutputs()
+        #expect(outputs.transcript == nil)
+        guard case .file(let path)? = outputs.audio, path == "rec.m4a" else {
+            Issue.record("expected audio file rec.m4a")
+            return
+        }
+    }
+
+    @Test func dashAudioIsWavStream() throws {
+        let outputs = try Aural.parse(["-a", "-"]).resolveOutputs()
+        guard case .stdoutWav? = outputs.audio else {
+            Issue.record("expected WAV stream to stdout")
+            return
+        }
+        #expect(outputs.transcript == nil)
+    }
+
+    @Test func rawDashAudioIsRawStream() throws {
+        let outputs = try Aural.parse(["--raw", "-a", "-"]).resolveOutputs()
+        guard case .stdoutRaw? = outputs.audio else {
+            Issue.record("expected raw PCM to stdout")
+            return
+        }
+    }
+
+    @Test func explicitTranscriptToStdoutWithAudioFile() throws {
+        let outputs = try Aural.parse(["-a", "rec.m4a", "-t", "-"]).resolveOutputs()
+        guard case .file? = outputs.audio else {
+            Issue.record("expected audio file")
+            return
+        }
+        guard case .stdout = outputs.transcript else {
+            Issue.record("expected transcript -> stdout")
+            return
+        }
+    }
+
+    @Test func noOutputDiscardsEverything() throws {
+        let outputs = try Aural.parse(["--no-output"]).resolveOutputs()
+        #expect(outputs.audio == nil)
+        #expect(outputs.transcript == nil)
     }
 }
 
@@ -149,9 +223,9 @@ struct SplitSpecTests {
         #expect(chunkPath(base: "noext", index: 2) == "noext_002")
     }
 
-    @Test func splitRequiresOutput() {
+    @Test func splitRequiresAudioFile() {
         #expect(throws: (any Error).self) {
-            _ = try Record.parse(["--split", "duration=10", "--no-output"])
+            _ = try Aural.parse(["--split", "duration=10", "--no-output"])
         }
     }
 }
