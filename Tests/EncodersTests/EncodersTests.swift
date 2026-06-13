@@ -119,3 +119,24 @@ struct PCMPackerTests {
         #expect([UInt8](data) == [0x56, 0x34, 0x12, 0xFF, 0xFF, 0xFF])
     }
 }
+
+@Suite("AudioFileFormat")
+struct AudioFileFormatTests {
+    @Test func detectsByExtension() {
+        #expect(AudioFileFormat.detect(fromPath: "/tmp/a.wav") == .wav)
+        #expect(AudioFileFormat.detect(fromPath: "/tmp/a.M4A") == .m4a)
+        #expect(AudioFileFormat.detect(fromPath: "rec.flac") == .flac)
+        #expect(AudioFileFormat.detect(fromPath: "x.mp3") == .mp3)
+        #expect(AudioFileFormat.detect(fromPath: "x.opus") == .opus)
+        #expect(AudioFileFormat.detect(fromPath: "noext") == nil)
+        #expect(AudioFileFormat.detect(fromPath: "a.ogg") == nil)
+    }
+
+    @Test func writabilityMatrix() {
+        #expect(AudioFileFormat.wav.isWritable)
+        #expect(AudioFileFormat.m4a.isWritable)
+        #expect(AudioFileFormat.flac.isWritable)
+        #expect(!AudioFileFormat.mp3.isWritable)
+        #expect(!AudioFileFormat.opus.isWritable)
+    }
+}

@@ -230,7 +230,11 @@ struct RecordingSession {
         // 6. Tear down: stop capture, drain pending writes, finalize header.
         session.stop()
         ioQueue.sync {}
-        try? sink.finalize()
+        do {
+            try sink.finalize()
+        } catch {
+            throw AuralError.ioError("failed to finalize output: \(error)")
+        }
 
         if let error = failure.take() {
             if isBrokenPipe(error) {
