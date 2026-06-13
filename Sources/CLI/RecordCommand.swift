@@ -57,6 +57,14 @@ struct Record: ParsableCommand {
         """)
     var wavToStdout = false
 
+    @Option(name: .customLong("split"), help: ArgumentHelp(
+        """
+        Split the recording into numbered files: duration=SEC for fixed-\
+        length chunks, silence=SEC to split on silence.
+        """,
+        valueName: "mode=value"))
+    var split: String?
+
     @Flag(name: .customLong("no-output"), help: "Capture but write nothing (dry run).")
     var noOutput = false
 
@@ -139,6 +147,16 @@ struct Record: ParsableCommand {
                     "encoded formats need a seekable file; use -o FILE with --format \(parsed.rawValue).")
             }
         }
+        if let split {
+            guard output != nil else {
+                throw ValidationError("--split requires -o/--output (chunks are numbered files).")
+            }
+            do {
+                _ = try SplitSpec.parse(split)
+            } catch let error as AuralError {
+                throw ValidationError(error.message)
+            }
+        }
     }
 
     func run() throws {
@@ -156,7 +174,8 @@ struct Record: ParsableCommand {
                 apps: apps,
                 excludeApps: excludeApps,
                 mix: mix,
-                forcedFormat: forcedFormat.flatMap { AudioFileFormat(rawValue: $0.lowercased()) }
+                forcedFormat: forcedFormat.flatMap { AudioFileFormat(rawValue: $0.lowercased()) },
+                split: split.map { try! SplitSpec.parse($0) }  // validated above
             ).run()
         }
     }
@@ -178,6 +197,7 @@ struct RecordingSession {
     let excludeApps: [String]
     let mix: Bool
     let forcedFormat: AudioFileFormat?
+    let split: SplitSpec?
 
     func run() throws {
         // 1. Build the capture session for the requested source.
@@ -285,28 +305,23 @@ struct RecordingSession {
             return DiscardSink()
         }
         if let outputPath {
-            let url = URL(fileURLWithPath: outputPath)
             let fileFormat = try resolveFileFormat(path: outputPath)
-            switch fileFormat {
-            case .wav:
-                do {
-                    let writer = try WAVFileWriter(destination: .file(url), format: format)
-                    return WAVSink(writer: writer, label: url.path)
-                } catch {
-                    throw AuralError.ioError("cannot open output file: \(error)")
+            if case .duration(let seconds) = split {
+                return SplittingSink(
+                    chunkSeconds: seconds,
+                    format: format,
+                    label: "\(chunkPath(base: outputPath, index: 1)), … (every \(seconds)s)"
+                ) { index in
+                    try Self.makeFileSink(
+                        path: chunkPath(base: outputPath, index: index),
+                        fileFormat: fileFormat, format: format)
                 }
-            case .m4a, .flac:
-                do {
-                    let writer = try EncodedFileWriter(
-                        url: url, fileFormat: fileFormat, pcmFormat: format)
-                    return EncodedSink(writer: writer, label: "\(url.path) (\(fileFormat.rawValue))")
-                } catch {
-                    throw AuralError.ioError("cannot open output file: \(error)")
-                }
-            case .mp3, .opus:
-                throw AuralError.unavailable(
-                    "\(fileFormat.rawValue) output is not implemented yet (planned; see PLAN.md). Use wav, m4a, or flac.")
             }
+            if case .silence = split {
+                throw AuralError.unavailable(
+                    "--split silence=SEC is not implemented yet (planned later in Phase 3).")
+            }
+            return try Self.makeFileSink(path: outputPath, fileFormat: fileFormat, format: format)
         }
         if wavToStdout {
             let writer: WAVFileWriter
@@ -366,6 +381,33 @@ struct RecordingSession {
             throw AuralError.noPermission(error.description)
         }
         return (MicCaptureSession(deviceID: deviceID, outputFormat: format), format)
+    }
+
+    /// Creates a single-file sink for the given format.
+    static func makeFileSink(
+        path: String, fileFormat: AudioFileFormat, format: PCMFormat
+    ) throws -> AudioSink {
+        let url = URL(fileURLWithPath: path)
+        switch fileFormat {
+        case .wav:
+            do {
+                let writer = try WAVFileWriter(destination: .file(url), format: format)
+                return WAVSink(writer: writer, label: url.path)
+            } catch {
+                throw AuralError.ioError("cannot open output file: \(error)")
+            }
+        case .m4a, .flac:
+            do {
+                let writer = try EncodedFileWriter(
+                    url: url, fileFormat: fileFormat, pcmFormat: format)
+                return EncodedSink(writer: writer, label: "\(url.path) (\(fileFormat.rawValue))")
+            } catch {
+                throw AuralError.ioError("cannot open output file: \(error)")
+            }
+        case .mp3, .opus:
+            throw AuralError.unavailable(
+                "\(fileFormat.rawValue) output is not implemented yet (planned; see PLAN.md). Use wav, m4a, or flac.")
+        }
     }
 
     /// Output format: --format override first, then the file extension.
