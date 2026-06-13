@@ -61,16 +61,7 @@ struct Convert: ParsableCommand {
 
     func run() throws {
         try runMapped(verbose: options.verbose) {
-            guard FileManager.default.fileExists(atPath: input) else {
-                throw AuralError.noInput("no such file: \(input)")
-            }
-            let source: AVAudioFile
-            do {
-                source = try AVAudioFile(forReading: URL(fileURLWithPath: input))
-            } catch {
-                throw AuralError.noInput(
-                    "cannot read '\(input)' as audio: \(error.localizedDescription)")
-            }
+            let source = try AudioPipeline.openForReading(input)
 
             // Output parameters default to the source's.
             let sourceFormat = source.processingFormat
@@ -99,41 +90,7 @@ struct Convert: ParsableCommand {
 
             let sink = try RecordingSession.makeFileSink(
                 path: output, fileFormat: fileFormat, format: pcmFormat)
-            let converter: PCMStreamConverter
-            do {
-                converter = try PCMStreamConverter(
-                    inputFormat: sourceFormat, outputFormat: pcmFormat)
-            } catch let error as TapEngineError {
-                throw AuralError.software(error.description)
-            }
-
-            // Decode -> convert -> encode in 32k-frame chunks.
-            let chunkFrames: AVAudioFrameCount = 32768
-            guard
-                let buffer = AVAudioPCMBuffer(
-                    pcmFormat: sourceFormat, frameCapacity: chunkFrames)
-            else {
-                throw AuralError.software("failed to allocate read buffer")
-            }
-            do {
-                // Note: read(into:) at EOF throws nilError on current macOS
-                // instead of returning 0 frames; bound by framePosition.
-                while source.framePosition < source.length {
-                    try source.read(into: buffer, frameCount: chunkFrames)
-                    if buffer.frameLength == 0 { break }
-                    if let data = converter.convert(buffer) {
-                        try sink.write(data)
-                    }
-                }
-                if let tail = converter.finish() {
-                    try sink.write(tail)
-                }
-                try sink.finalize()
-            } catch let error as AuralError {
-                throw error
-            } catch {
-                throw AuralError.ioError("conversion failed: \(error)")
-            }
+            try AudioPipeline.decode(source, to: sink, format: pcmFormat)
             Log.verbose("wrote \(sink.bytesWritten) PCM bytes to \(sink.label)")
         }
     }
