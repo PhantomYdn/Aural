@@ -35,17 +35,25 @@
 
 ## Phase 3: Formats, Chunking & Conversion (PRD M3)
 
-- [ ] Implement M4A/AAC output via native CoreAudio encoder (P0)
-- [ ] Implement FLAC output via native CoreAudio encoder (P0)
-- [ ] Implement format selection: extension-based detection (`.wav`, `.m4a`, `.flac`, `.mp3`, `.opus`) plus `--format` override
-- [ ] Implement MP3 output via statically linked LAME (P1)
-- [ ] Implement Ogg/Opus output via statically linked libopus/libogg (P1)
-- [ ] Implement `--split duration=SEC`: sequential files (`name_001`, `name_002`, …) with correctly flushed headers (P1)
-- [ ] Implement `--split silence=SEC` with configurable dBFS threshold; each chunk independently playable (P2, US04)
-- [ ] Implement `aural convert`: format conversion reusing CoreAudio codecs (PRD §6.1)
-- [ ] Implement `aural info`: print duration, sample rate, channels, metadata; read support for WAV, AIFF, CAF, M4A, FLAC
-- [ ] Implement metadata embedding: WAV INFO chunk, MP4 atoms for M4A, ID3v2 for MP3 (P2)
-- [ ] Verify all output formats are accepted as-is by `whisper.cpp`, Fabric AI, and at least one cloud transcription API (PRD §6.4)
+- [x] Implement M4A/AAC output via native CoreAudio encoder (P0)
+- [x] Implement FLAC output via native CoreAudio encoder (P0) — note: OS encoder silently corrupts files < 4608 frames; guarded with a clear error
+- [x] Implement format selection: extension-based detection (`.wav`, `.m4a`, `.flac`, `.mp3`, `.opus`) plus `--format` override
+- [ ] Implement MP3 output via statically linked LAME (P1) — deferred: vendor LAME as SwiftPM C target in a dedicated session; `.mp3` currently exits 69
+- [ ] Implement Ogg/Opus output via statically linked libopus/libogg (P1) — deferred; preferred approach: native `kAudioFormatOpus` encoder + hand-written Ogg muxer (zero deps); `.opus` currently exits 69
+- [x] Implement `--split duration=SEC`: sequential files (`name_001`, `name_002`, …) with correctly flushed headers (P1)
+- [x] Implement `--split silence=SEC` with configurable dBFS threshold (`--silence-threshold`, default −50); each chunk independently playable, no audio dropped (P2, US04)
+- [x] Implement `aural convert`: format conversion reusing CoreAudio codecs (PRD §6.1) — verified by lossless tone roundtrips (wav→m4a→wav, wav→flac→wav)
+- [x] Implement `aural info`: print duration, sample rate, channels, metadata; read support for WAV, AIFF, CAF, M4A, FLAC
+- [x] Implement metadata embedding: WAV INFO chunk (ICRD/ISFT/INAM) — MP4 atoms and ID3v2 deferred with their formats (P2)
+- [ ] Verify all output formats are accepted as-is by `whisper.cpp`, Fabric AI, and at least one cloud transcription API (PRD §6.4) — partially done locally (afinfo + AVAudioFile readback + convert roundtrips); whisper.cpp acceptance lands naturally with Phase 4; Fabric/cloud check needs network/tools
+
+### Pending live verification (capture permissions were reset mid-session; needs GUI access)
+
+- [ ] Re-grant TCC: Microphone for the terminal (System Settings → Privacy & Security → Microphone) and System Audio Recording (Screen & System Audio Recording → "+" → terminal, restart terminal)
+- [ ] `aural record -t 2 -o x.m4a` and `x.flac` — live encoded capture (afinfo check)
+- [ ] `aural record -t 5 --split duration=2 -o x.wav` — 3 chunks, each playable
+- [ ] Live `--split silence` smoke with real audio
+- [ ] Re-run `Scripts/e2e-app-isolation.sh` (should still pass)
 
 ## Phase 4: Transcription Pipeline (PRD M4)
 

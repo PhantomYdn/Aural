@@ -210,6 +210,16 @@ struct RecordingSession {
     let silenceThreshold: Double
 
     func run() throws {
+        // 0. Fail fast on unwritable output formats, before any permission
+        // prompts or capture setup.
+        if let outputPath {
+            let fileFormat = try resolveFileFormat(path: outputPath)
+            guard fileFormat.isWritable else {
+                throw AuralError.unavailable(
+                    "\(fileFormat.rawValue) output is not implemented yet (planned; see PLAN.md). Use wav, m4a, or flac.")
+            }
+        }
+
         // 1. Build the capture session for the requested source.
         let (session, format, sourceLabel) = try makeCapture()
 
