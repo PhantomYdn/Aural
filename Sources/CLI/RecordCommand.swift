@@ -65,6 +65,11 @@ struct Record: ParsableCommand {
         valueName: "mode=value"))
     var split: String?
 
+    @Option(name: .customLong("silence-threshold"), help: ArgumentHelp(
+        "Peak level (dBFS, negative) below which audio counts as silence for --split silence.",
+        valueName: "dbfs"))
+    var silenceThreshold: Double = -50
+
     @Flag(name: .customLong("no-output"), help: "Capture but write nothing (dry run).")
     var noOutput = false
 
@@ -157,6 +162,9 @@ struct Record: ParsableCommand {
                 throw ValidationError(error.message)
             }
         }
+        if silenceThreshold >= 0 {
+            throw ValidationError("--silence-threshold must be negative (dBFS).")
+        }
     }
 
     func run() throws {
@@ -175,7 +183,8 @@ struct Record: ParsableCommand {
                 excludeApps: excludeApps,
                 mix: mix,
                 forcedFormat: forcedFormat.flatMap { AudioFileFormat(rawValue: $0.lowercased()) },
-                split: split.map { try! SplitSpec.parse($0) }  // validated above
+                split: split.map { try! SplitSpec.parse($0) },  // validated above
+                silenceThreshold: silenceThreshold
             ).run()
         }
     }
@@ -198,6 +207,7 @@ struct RecordingSession {
     let mix: Bool
     let forcedFormat: AudioFileFormat?
     let split: SplitSpec?
+    let silenceThreshold: Double
 
     func run() throws {
         // 1. Build the capture session for the requested source.
@@ -317,9 +327,17 @@ struct RecordingSession {
                         fileFormat: fileFormat, format: format)
                 }
             }
-            if case .silence = split {
-                throw AuralError.unavailable(
-                    "--split silence=SEC is not implemented yet (planned later in Phase 3).")
+            if case .silence(let seconds) = split {
+                return SilenceSplittingSink(
+                    silenceSeconds: seconds,
+                    thresholdDBFS: silenceThreshold,
+                    format: format,
+                    label: "\(chunkPath(base: outputPath, index: 1)), … (on \(seconds)s silence)"
+                ) { index in
+                    try Self.makeFileSink(
+                        path: chunkPath(base: outputPath, index: index),
+                        fileFormat: fileFormat, format: format)
+                }
             }
             return try Self.makeFileSink(path: outputPath, fileFormat: fileFormat, format: format)
         }

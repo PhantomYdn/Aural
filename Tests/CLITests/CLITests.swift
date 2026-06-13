@@ -216,3 +216,89 @@ struct SplittingSinkTests {
         #expect(indices == [1, 2, 3])
     }
 }
+
+@Suite("Silence splitting")
+struct SilenceSplittingTests {
+    // 1000 Hz 16-bit mono -> byteRate 2000; 0.5 s blocks are 1000 bytes.
+    private let format = PCMFormat(sampleRate: 1000, bitsPerSample: 16, channels: 1)
+
+    private func loud(_ bytes: Int = 1000) -> Data {
+        var data = Data(capacity: bytes)
+        for i in 0..<(bytes / 2) {
+            withUnsafeBytes(of: Int16(i % 2 == 0 ? 16000 : -16000).littleEndian) {
+                data.append(contentsOf: $0)
+            }
+        }
+        return data
+    }
+
+    private func quiet(_ bytes: Int = 1000) -> Data { Data(count: bytes) }
+
+    @Test func peakAmplitudeByDepth() {
+        #expect(peakAmplitude(of: loud(), format: format) > 0.4)
+        #expect(peakAmplitude(of: quiet(), format: format) == 0)
+        let f24 = PCMFormat(sampleRate: 1000, bitsPerSample: 24, channels: 1)
+        // One 24-bit sample at half scale: 0x400000 -> bytes [00, 00, 40].
+        #expect(abs(peakAmplitude(of: Data([0x00, 0x00, 0x40]), format: f24) - 0.5) < 0.01)
+        let f32 = PCMFormat(sampleRate: 1000, bitsPerSample: 32, channels: 1)
+        var d32 = Data()
+        withUnsafeBytes(of: Int32(1 << 30).littleEndian) { d32.append(contentsOf: $0) }
+        #expect(abs(peakAmplitude(of: d32, format: f32) - 0.5) < 0.01)
+    }
+
+    @Test func splitsOnSustainedSilence() throws {
+        var chunks: [RecordingSinkSpy] = []
+        let sink = SilenceSplittingSink(
+            silenceSeconds: 1.5, thresholdDBFS: -50, format: format, label: "t"
+        ) { _ in
+            let spy = RecordingSinkSpy()
+            chunks.append(spy)
+            return spy
+        }
+        // loud 1s, silence 2s, loud 1s (0.5 s blocks)
+        for block in [loud(), loud(), quiet(), quiet(), quiet(), quiet(), loud(), loud()] {
+            try sink.write(block)
+        }
+        try sink.finalize()
+
+        #expect(chunks.count == 2)
+        // Chunk 1: 2 loud + 3 quiet blocks (split at 1.5s of silence).
+        #expect(chunks[0].written.count == 5000)
+        // Chunk 2: trailing quiet + 2 loud blocks; nothing dropped.
+        #expect(chunks[1].written.count == 3000)
+        #expect(sink.bytesWritten == 8000)
+    }
+
+    @Test func longSilenceYieldsSingleFollowUpChunk() throws {
+        var chunks: [RecordingSinkSpy] = []
+        let sink = SilenceSplittingSink(
+            silenceSeconds: 1.0, thresholdDBFS: -50, format: format, label: "t"
+        ) { _ in
+            let spy = RecordingSinkSpy()
+            chunks.append(spy)
+            return spy
+        }
+        try sink.write(loud())
+        for _ in 0..<10 { try sink.write(quiet()) }  // 5s of silence
+        try sink.write(loud())
+        try sink.finalize()
+        // Disarmed after the split: one follow-up chunk, not five.
+        #expect(chunks.count == 2)
+    }
+
+    @Test func leadingSilenceDoesNotSplit() throws {
+        var chunks: [RecordingSinkSpy] = []
+        let sink = SilenceSplittingSink(
+            silenceSeconds: 1.0, thresholdDBFS: -50, format: format, label: "t"
+        ) { _ in
+            let spy = RecordingSinkSpy()
+            chunks.append(spy)
+            return spy
+        }
+        for _ in 0..<6 { try sink.write(quiet()) }  // 3s leading silence
+        try sink.write(loud())
+        try sink.finalize()
+        // Splitter is disarmed until sound first appears.
+        #expect(chunks.count == 1)
+    }
+}
