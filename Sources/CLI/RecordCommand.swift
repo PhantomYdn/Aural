@@ -211,10 +211,15 @@ struct RecordingSession {
 
     func run() throws {
         // 1. Build the capture session for the requested source.
-        let (session, format) = try makeCapture()
+        let (session, format, sourceLabel) = try makeCapture()
 
-        // 2. Set up the output sink.
-        let sink = try makeSink(format: format)
+        // 2. Set up the output sink. Recordings carry WAV INFO metadata
+        // (start time, software, source) per PRD §4.1.7.
+        let metadata = WAVMetadata(
+            creationDate: Date(),
+            software: "aural 0.1.0",
+            title: sourceLabel)
+        let sink = try makeSink(format: format, metadata: metadata)
         Log.verbose("destination: \(sink.label)")
 
         // 3. Capture. SIGPIPE is ignored so a closed downstream pipe surfaces
@@ -310,7 +315,7 @@ struct RecordingSession {
     /// -o FILE -> file in the detected/forced format; --stdout -> WAV
     /// stream; --no-output -> discard; none -> raw PCM to stdout (refused
     /// on a terminal).
-    private func makeSink(format: PCMFormat) throws -> AudioSink {
+    private func makeSink(format: PCMFormat, metadata: WAVMetadata) throws -> AudioSink {
         if noOutput {
             return DiscardSink()
         }
@@ -324,7 +329,7 @@ struct RecordingSession {
                 ) { index in
                     try Self.makeFileSink(
                         path: chunkPath(base: outputPath, index: index),
-                        fileFormat: fileFormat, format: format)
+                        fileFormat: fileFormat, format: format, metadata: metadata)
                 }
             }
             if case .silence(let seconds) = split {
@@ -336,10 +341,11 @@ struct RecordingSession {
                 ) { index in
                     try Self.makeFileSink(
                         path: chunkPath(base: outputPath, index: index),
-                        fileFormat: fileFormat, format: format)
+                        fileFormat: fileFormat, format: format, metadata: metadata)
                 }
             }
-            return try Self.makeFileSink(path: outputPath, fileFormat: fileFormat, format: format)
+            return try Self.makeFileSink(
+                path: outputPath, fileFormat: fileFormat, format: format, metadata: metadata)
         }
         if wavToStdout {
             let writer: WAVFileWriter
@@ -360,8 +366,9 @@ struct RecordingSession {
         return RawStreamSink(handle: .standardOutput, label: "stdout (raw pcm)")
     }
 
-    /// Builds the capture session and output format for the requested source.
-    private func makeCapture() throws -> (CaptureSession, PCMFormat) {
+    /// Builds the capture session, output format, and a human-readable
+    /// source label for the requested source.
+    private func makeCapture() throws -> (CaptureSession, PCMFormat, String) {
         if let (scope, label) = try makeTapScope() {
             // Tap capture: stereo by default.
             let channelCount = channels ?? 2
@@ -384,7 +391,7 @@ struct RecordingSession {
             Log.verbose("source: \(sourceLabel) -> \(rate) Hz, \(bits)-bit, \(channelCount) ch")
             let session = SystemCaptureSession(
                 scope: scope, micDeviceUID: micUID, outputFormat: format)
-            return (session, format)
+            return (session, format, sourceLabel)
         }
 
         let inputDevice = try resolveInputDevice()
@@ -398,18 +405,21 @@ struct RecordingSession {
         } catch let error as TapEngineError {
             throw AuralError.noPermission(error.description)
         }
-        return (MicCaptureSession(deviceID: deviceID, outputFormat: format), format)
+        return (MicCaptureSession(deviceID: deviceID, outputFormat: format), format, inputDevice.name)
     }
 
-    /// Creates a single-file sink for the given format.
+    /// Creates a single-file sink for the given format. Metadata is
+    /// embedded for WAV (LIST/INFO); MP4 atoms and ID3 are deferred.
     static func makeFileSink(
-        path: String, fileFormat: AudioFileFormat, format: PCMFormat
+        path: String, fileFormat: AudioFileFormat, format: PCMFormat,
+        metadata: WAVMetadata = WAVMetadata()
     ) throws -> AudioSink {
         let url = URL(fileURLWithPath: path)
         switch fileFormat {
         case .wav:
             do {
-                let writer = try WAVFileWriter(destination: .file(url), format: format)
+                let writer = try WAVFileWriter(
+                    destination: .file(url), format: format, metadata: metadata)
                 return WAVSink(writer: writer, label: url.path)
             } catch {
                 throw AuralError.ioError("cannot open output file: \(error)")

@@ -1,4 +1,5 @@
 import Foundation
+import AudioToolbox
 import Testing
 
 @testable import Encoders
@@ -138,5 +139,91 @@ struct AudioFileFormatTests {
         #expect(AudioFileFormat.flac.isWritable)
         #expect(!AudioFileFormat.mp3.isWritable)
         #expect(!AudioFileFormat.opus.isWritable)
+    }
+}
+
+@Suite("WAV metadata")
+struct WAVMetadataTests {
+    @Test func infoListChunkLayout() {
+        let chunk = WAVFileWriter.infoListChunk(
+            WAVMetadata(creationDate: nil, software: "aural", title: nil))
+        // LIST + size + INFO + ISFT + size(6) + "aural\0" (padded even)
+        let expected: [UInt8] =
+            Array("LIST".utf8) + [0x12, 0, 0, 0]
+            + Array("INFO".utf8)
+            + Array("ISFT".utf8) + [0x06, 0, 0, 0]
+            + Array("aural".utf8) + [0x00]
+        #expect([UInt8](chunk) == expected)
+    }
+
+    @Test func finalizeAppendsMetadataAndPatchesRiffSize() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("aural-meta-\(UUID().uuidString).wav")
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let format = PCMFormat(sampleRate: 44100, bitsPerSample: 16, channels: 1)
+        let writer = try WAVFileWriter(
+            destination: .file(url), format: format,
+            metadata: WAVMetadata(software: "aural", title: "Test Mic"))
+        try writer.write(Data([1, 2, 3, 4]))
+        try writer.finalize()
+
+        let contents = try Data(contentsOf: url)
+        // RIFF size covers header + data + LIST chunk.
+        let riffSize = contents[4..<8].withUnsafeBytes { $0.loadUnaligned(as: UInt32.self) }
+        #expect(UInt64(riffSize) == UInt64(contents.count - 8))
+        // data size untouched by metadata.
+        let dataSize = contents[40..<44].withUnsafeBytes { $0.loadUnaligned(as: UInt32.self) }
+        #expect(dataSize == 4)
+        // LIST chunk directly after payload.
+        #expect(contents[48..<52] == Data("LIST".utf8))
+        #expect(contents.range(of: Data("INAM".utf8)) != nil)
+        #expect(contents.range(of: Data("Test Mic".utf8)) != nil)
+    }
+
+    @Test func noMetadataMeansNoListChunk() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("aural-nometa-\(UUID().uuidString).wav")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let format = PCMFormat(sampleRate: 44100, bitsPerSample: 16, channels: 1)
+        let writer = try WAVFileWriter(destination: .file(url), format: format)
+        try writer.write(Data([1, 2]))
+        try writer.finalize()
+        let contents = try Data(contentsOf: url)
+        #expect(contents.count == WAVFileWriter.headerSize + 2)
+        #expect(contents.range(of: Data("LIST".utf8)) == nil)
+    }
+}
+
+@Suite("WAV metadata readback")
+struct WAVMetadataReadbackTests {
+    @Test func coreAudioReadsInfoChunk() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("aural-metard-\(UUID().uuidString).wav")
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let format = PCMFormat(sampleRate: 44100, bitsPerSample: 16, channels: 1)
+        let writer = try WAVFileWriter(
+            destination: .file(url), format: format,
+            metadata: WAVMetadata(
+                creationDate: Date(), software: "aural 0.1.0", title: "Test Source"))
+        try writer.write(Data(count: 44100 * 2))  // 1s silence
+        try writer.finalize()
+
+        var fileID: AudioFileID?
+        #expect(AudioFileOpenURL(url as CFURL, .readPermission, 0, &fileID) == noErr)
+        guard let file = fileID else { return }
+        defer { AudioFileClose(file) }
+
+        var dictionary: Unmanaged<CFDictionary>?
+        var size = UInt32(MemoryLayout<Unmanaged<CFDictionary>?>.size)
+        let status = AudioFileGetProperty(
+            file, kAudioFilePropertyInfoDictionary, &size, &dictionary)
+        #expect(status == noErr)
+        let info = dictionary?.takeRetainedValue() as? [String: Any] ?? [:]
+        #expect(info["title"] as? String == "Test Source")
+        // CoreAudio maps ICRD -> "recorded date"; ISFT is stored in the
+        // file (golden test) but not surfaced by this API.
+        #expect(info["recorded date"] != nil)
     }
 }

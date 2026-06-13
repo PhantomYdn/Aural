@@ -1,5 +1,23 @@
 import Foundation
 
+/// Metadata embedded as a WAV LIST/INFO chunk (PRD §4.1.7).
+public struct WAVMetadata: Sendable {
+    /// Recording start time -> ICRD (date portion, ISO format).
+    public var creationDate: Date?
+    /// Writing software -> ISFT.
+    public var software: String?
+    /// Source/title -> INAM (e.g., device or app name).
+    public var title: String?
+
+    public init(creationDate: Date? = nil, software: String? = nil, title: String? = nil) {
+        self.creationDate = creationDate
+        self.software = software
+        self.title = title
+    }
+
+    var isEmpty: Bool { creationDate == nil && software == nil && title == nil }
+}
+
 /// Writes interleaved little-endian signed PCM into a WAV (RIFF) container.
 ///
 /// Two modes:
@@ -40,6 +58,7 @@ public final class WAVFileWriter: @unchecked Sendable {
     private let handle: FileHandle
     private let seekable: Bool
     private let format: PCMFormat
+    private let metadata: WAVMetadata
     private let lock = NSLock()
     private var dataBytes: UInt64 = 0
     private var finalized = false
@@ -51,11 +70,17 @@ public final class WAVFileWriter: @unchecked Sendable {
         return dataBytes
     }
 
-    public init(destination: Destination, format: PCMFormat) throws {
+    /// - Parameter metadata: embedded as a trailing LIST/INFO chunk on
+    ///   finalize (seekable files only; ignored for streams, where readers
+    ///   consume until EOF and would treat trailing chunks as audio).
+    public init(
+        destination: Destination, format: PCMFormat, metadata: WAVMetadata = WAVMetadata()
+    ) throws {
         guard [16, 24, 32].contains(format.bitsPerSample) else {
             throw WriterError.unsupportedBitDepth(format.bitsPerSample)
         }
         self.format = format
+        self.metadata = metadata
         switch destination {
         case .file(let url):
             FileManager.default.createFile(atPath: url.path, contents: nil)
@@ -80,9 +105,10 @@ public final class WAVFileWriter: @unchecked Sendable {
         dataBytes += UInt64(data.count)
     }
 
-    /// Finishes the file. For seekable destinations, patches the RIFF and
-    /// `data` chunk sizes so the file is valid; for streams this is a no-op.
-    /// Safe to call more than once.
+    /// Finishes the file. For seekable destinations, appends the metadata
+    /// LIST/INFO chunk (if any) and patches the RIFF and `data` chunk sizes
+    /// so the file is valid; for streams this is a no-op. Safe to call more
+    /// than once.
     public func finalize() throws {
         lock.lock()
         defer { lock.unlock() }
@@ -90,15 +116,50 @@ public final class WAVFileWriter: @unchecked Sendable {
         finalized = true
         guard seekable else { return }
 
+        var trailing = Data()
+        if !metadata.isEmpty {
+            trailing = Self.infoListChunk(metadata)
+            try handle.seekToEnd()
+            try handle.write(contentsOf: trailing)
+        }
+
         // Sizes are capped at UInt32.max per the RIFF format.
         let data32 = UInt32(clamping: dataBytes)
-        let riff32 = UInt32(clamping: dataBytes + UInt64(Self.headerSize) - 8)
+        let riff32 = UInt32(
+            clamping: dataBytes + UInt64(Self.headerSize) - 8 + UInt64(trailing.count))
         try handle.seek(toOffset: 4)
         try handle.write(contentsOf: Self.le32(riff32))
         try handle.seek(toOffset: UInt64(Self.headerSize - 4))
         try handle.write(contentsOf: Self.le32(data32))
         try handle.synchronize()
         try handle.close()
+    }
+
+    /// Builds a RIFF LIST chunk with INFO subchunks (ICRD/ISFT/INAM).
+    static func infoListChunk(_ metadata: WAVMetadata) -> Data {
+        var entries: [(String, String)] = []
+        if let date = metadata.creationDate {
+            let formatter = DateFormatter()
+            formatter.dateFormat = "yyyy-MM-dd"
+            formatter.timeZone = TimeZone.current
+            entries.append(("ICRD", formatter.string(from: date)))
+        }
+        if let software = metadata.software { entries.append(("ISFT", software)) }
+        if let title = metadata.title { entries.append(("INAM", title)) }
+
+        var body = Data("INFO".utf8)
+        for (id, value) in entries {
+            var content = Data(value.utf8)
+            content.append(0)  // NUL terminator
+            if content.count % 2 != 0 { content.append(0) }  // even padding
+            body.append(contentsOf: Array(id.utf8))
+            body.append(le32(UInt32(content.count)))
+            body.append(content)
+        }
+        var chunk = Data("LIST".utf8)
+        chunk.append(le32(UInt32(body.count)))
+        chunk.append(body)
+        return chunk
     }
 
     private func writeAll(_ data: Data) throws {
