@@ -1,6 +1,9 @@
 import ArgumentParser
+import CoreAudio
+import DeviceManager
 import Encoders
 import Foundation
+import TapEngine
 
 struct Transcribe: ParsableCommand {
     static let configuration = CommandConfiguration(
@@ -48,6 +51,11 @@ struct Transcribe: ParsableCommand {
         "Channels of raw PCM on stdin: 1 or 2.", valueName: "n"))
     var inputChannels: Int = 1
 
+    @Option(name: [.customShort("t"), .long], help: ArgumentHelp(
+        "Stop a device capture after this many seconds (otherwise Ctrl+C).",
+        valueName: "sec"))
+    var duration: Double?
+
     @OptionGroup var options: GlobalOptions
 
     func validate() throws {
@@ -62,6 +70,9 @@ struct Transcribe: ParsableCommand {
         }
         guard (1...768_000).contains(inputRate) else {
             throw ValidationError("--input-rate must be between 1 and 768000 Hz.")
+        }
+        if let duration, duration <= 0 {
+            throw ValidationError("--duration must be positive.")
         }
     }
 
@@ -117,8 +128,66 @@ struct Transcribe: ParsableCommand {
             Log.verbose("normalizing '\(input)' to 16 kHz mono WAV")
             return try AudioPipeline.normalizeFileForWhisper(input)
         }
+        if let device = try? DeviceManager.listDevices(scope: .input)
+            .first(where: { $0.uid == input })
+        {
+            return try captureForTranscription(device: device)
+        }
         throw AuralError.noInput(
-            "input '\(input)' is neither a file, '-', nor a known device UID (see 'aural devices').")
+            "input '\(input)' is neither a file, '-', nor a known input-device UID (see 'aural devices').")
+    }
+
+    /// Records from the device into memory at whisper's format, then stages
+    /// a temporary WAV (PRD §6.6: record in memory, pipe to engine).
+    private func captureForTranscription(device: AudioDevice) throws -> URL {
+        do {
+            try MicCaptureSession.ensureMicrophonePermission()
+        } catch let error as TapEngineError {
+            throw AuralError.noPermission(error.description)
+        }
+
+        let format = AudioPipeline.whisperFormat
+        let session = MicCaptureSession(
+            deviceID: AudioDeviceID(device.objectID), outputFormat: format)
+        let accumulator = CaptureAccumulator()
+        let done = DispatchSemaphore(value: 0)
+        let budget = duration.map { seconds in
+            ByteBudget(
+                bytes: UInt64(seconds * Double(format.byteRate)),
+                frameSize: format.bytesPerFrame)
+        }
+
+        do {
+            try session.start { data in
+                let (chunk, exhausted) = budget?.consume(data) ?? (data, false)
+                if !chunk.isEmpty { accumulator.append(chunk) }
+                if exhausted { done.signal() }
+            }
+        } catch let error as TapEngineError {
+            throw AuralError.software(error.description)
+        }
+
+        let watcher = SignalWatcher()
+        watcher.watch([SIGINT, SIGTERM]) { done.signal() }
+        if duration == nil {
+            Log.notice("recording from \(device.name) — press Ctrl+C to stop and transcribe")
+        }
+        done.wait()
+        watcher.cancel()
+        session.stop()
+
+        let captured = accumulator.take()
+        Log.verbose("captured \(captured.count) bytes from \(device.name)")
+        guard !captured.isEmpty else {
+            throw AuralError.noInput("no audio captured from \(device.name)")
+        }
+
+        let staged = FileManager.default.temporaryDirectory
+            .appendingPathComponent("aural-capture-\(UUID().uuidString).wav")
+        let writer = try WAVFileWriter(destination: .file(staged), format: format)
+        try writer.write(captured)
+        try writer.finalize()
+        return staged
     }
 
     /// Reads audio from stdin (WAV stream or raw PCM) into a temporary WAV
@@ -170,6 +239,24 @@ struct Transcribe: ParsableCommand {
             throw AuralError.noInput("stdin contained no audio payload")
         }
         return try AudioPipeline.normalizeFileForWhisper(staged.path)
+    }
+}
+
+/// Thread-safe in-memory capture buffer.
+final class CaptureAccumulator: @unchecked Sendable {
+    private let lock = NSLock()
+    private var data = Data()
+
+    func append(_ chunk: Data) {
+        lock.lock()
+        defer { lock.unlock() }
+        data.append(chunk)
+    }
+
+    func take() -> Data {
+        lock.lock()
+        defer { lock.unlock() }
+        return data
     }
 }
 
