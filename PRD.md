@@ -9,7 +9,7 @@
 
 ## 1. Overview
 
-Aural is a native macOS command-line utility, shipped as a single Swift binary, that captures audio from physical input sources (microphones) and from the system itself — all system audio or the output of specific applications — using Core Audio process taps (macOS 14.4+). No third-party virtual audio driver (e.g., BlackHole) is required. Recordings are saved locally and serve as the foundation for downstream audio processing workflows, most notably automatic speech-to-text transcription.
+Aural is a native macOS command-line utility, shipped as a single Swift binary, that captures audio from physical input sources (microphones) and from the system itself — all system audio or the output of specific applications — using Core Audio process taps (macOS 14.4+) or ScreenCaptureKit (macOS 15+), selectable per the environment. No third-party virtual audio driver (e.g., BlackHole) is required. Recordings are saved locally and serve as the foundation for downstream audio processing workflows, most notably automatic speech-to-text transcription.
 
 The tool strictly follows Unix/Linux design patterns, treating audio as a stream that can be manipulated, piped, and extended by other command-line programs. The primary goal is to provide a simple, scriptable, and composable replacement for GUI-based audio recording, enabling users to automate meeting recordings, create transcription pipelines, or build custom audio-processing chains without leaving the terminal.
 
@@ -44,7 +44,7 @@ The tool strictly follows Unix/Linux design patterns, treating audio as a stream
 |---|---------|----------|-------------|
 | 1 | Device & application enumeration | P0 | List all input/output audio devices (UID, name, channels, sample rates) and running applications capturable via process taps (name, bundle ID, PID). JSON output for scripting. |
 | 2 | Audio capture from any single source | P0 | Record from a specified input device (built-in microphone, USB headset). Configurable sample rate, bit-depth, and channel count. Falls back to default input device. |
-| 3 | System & per-app audio capture (Core Audio taps) | P0 | Capture all system audio (`--system`), specific application(s) (`--app`, repeatable), or everything except listed apps (`--exclude-app`). Mixed mic + system capture via `--mix`. |
+| 3 | System & per-app audio capture | P0 | Capture all system audio (`--system`), specific application(s) (`--app`, repeatable), or everything except listed apps (`--exclude-app`). Mixed mic + system capture via `--mix`. Two interchangeable backends — ScreenCaptureKit (macOS 15+, GUI session) and Core Audio process taps (macOS 14.4+, headless-capable) — selected with `--capture-backend` (default auto); see §6.2. |
 | 4 | File output — native formats | P0 | Save to WAV (PCM), M4A/AAC, or FLAC using native CoreAudio encoders. |
 | 5 | Stream-mode operation | P0 | Stream a WAV container to stdout with `-a -` (e.g., `aural -a - \| ffmpeg ...`), or headerless PCM with `--raw`; accept audio from stdin (`-i -`) for transcoding/transcription. |
 | 6 | Signal handling & graceful shutdown | P0 | On SIGINT (Ctrl+C) or SIGTERM, finalise the output file header so it remains playable. |
@@ -138,7 +138,7 @@ aural models | config                    # model + default management
 **Input — pick one (default: system default microphone):**
 - *(no flag)* : live capture from the default input device.
 - `-d, --device UID` : live capture from a specific input device.
-- `--system` : live capture of all system audio via a process tap.
+- `--system` : live capture of all system audio (via the selected capture backend, see §6.2).
 - `--app ID` : live capture of a specific application (bundle ID or PID; repeatable).
 - `--exclude-app ID` : live capture of all system audio except the listed application(s) (repeatable).
 - `--mix` : additionally mix the microphone (default or `-d` device) into a system/app capture.
@@ -156,6 +156,7 @@ aural models | config                    # model + default management
 - `-c, --channels 1|2` : channel count (default based on the source, capped at 2).
 - `--duration SEC` : stop live capture after SEC seconds (otherwise Ctrl+C).
 - `--split duration=SEC` / `--split silence=SEC` : split the audio file into sequentially numbered chunks (requires `-a FILE`; silence threshold via `--silence-threshold` dBFS).
+- `--capture-backend auto|sckit|coreaudio` : system/app capture backend (default `auto`, or `$AURAL_CAPTURE`); see §6.2.
 
 **Format overrides & transcription:**
 - `--format wav|m4a|flac|mp3|opus` : force the audio format, overriding the extension.
@@ -223,8 +224,11 @@ All invocations accept `-h, --help` and `-v, --verbose`.
 ### 6.2 Source Handling
 
 - Use CoreAudio APIs to enumerate AudioDeviceIDs; automatically exclude inactive devices.
-- Use Core Audio process taps (`CATapDescription` / `AudioHardwareCreateProcessTap`, macOS 14.4+) for system and per-app capture; no virtual audio driver required.
-- Tap lifecycle: taps are created at capture start and destroyed on stop; if a tapped application quits mid-capture, the capture finalises cleanly and reports it on stderr.
+- **System/app capture uses one of two interchangeable backends** (both deliver the same packed-PCM stream); `--capture-backend auto|sckit|coreaudio` (default `auto`, or `$AURAL_CAPTURE`) selects:
+  - **`sckit` — ScreenCaptureKit** (`SCStream`, macOS 15+): captures system/app audio and, for `--mix`, the microphone in the same synchronized stream. Audio is delivered continuously (silence when idle), so `--mix` keeps recording the microphone even when no system audio is playing. Requires the **Screen Recording** TCC permission and a graphical login session (it cannot run headless / over SSH / as a LaunchDaemon).
+  - **`coreaudio` — Core Audio process taps** (`CATapDescription` / `AudioHardwareCreateProcessTap`, macOS 14.4+): no virtual audio driver. Uses a private aggregate device; for `--mix` the **microphone is the aggregate's clock master** so capture runs continuously regardless of system-audio activity. Requires the narrower **System Audio Recording** permission and **works headless** (cron/launchd/SSH).
+  - **`auto`** prefers `sckit` when available (macOS 15+, a GUI session is present, and Screen Recording is granted) and otherwise falls back to `coreaudio`, printing a one-line notice on stderr. Headless and macOS 14.x always use `coreaudio`.
+- Tap/stream lifecycle: created at capture start and torn down on stop; if a tapped application quits mid-capture, the capture finalises cleanly and reports it on stderr.
 - Fallback to the default input device when no source flag is given.
 
 ### 6.3 Streaming & Pipes
@@ -281,8 +285,8 @@ All invocations accept `-h, --help` and `-v, --verbose`.
 | **Performance** | Recording must use < 3% CPU on an Apple Silicon Mac (16 kHz mono); buffering delays < 100 ms. |
 | **Reliability** | 24-hour continuous recording must produce a valid, non-corrupted file when terminated via SIGINT/SIGTERM. Resilience to hard kills (SIGKILL, power loss) is parked — see Open Questions. |
 | **Usability** | CLI help and error messages are clear, include examples, and follow POSIX utility conventions. |
-| **Compatibility** | macOS 14.4 (Sonoma) and later — required by the Core Audio process-tap API; both Intel and Apple Silicon. The `whisperkit` and `parakeet` engines are Apple-Silicon-first (runtime-gated with a clear error on Intel); `whisper` and `apple` cover Intel. |
-| **Security & Privacy** | No external network calls by default; cloud transcription backends are opt-in and use HTTPS with user-provided API keys. (Live transcription may run a local `whisper-server` bound to loopback 127.0.0.1 for performance — IPC with Aural's own child process, never an external connection; disable with `AURAL_WHISPER_SERVER=0`.) System/app audio capture requires the macOS "System Audio Recording" TCC permission; the prompt and approval flow (including terminal-attributed permission for unbundled CLIs) must be documented. The `apple` engine uses the Speech Recognition TCC permission; `whisperkit` and `parakeet` download CoreML models from Hugging Face on first use (model fetch only, then fully local). |
+| **Compatibility** | macOS 14.4 (Sonoma) and later — required by the Core Audio process-tap API; both Intel and Apple Silicon. The ScreenCaptureKit capture backend additionally needs macOS 15+ and a graphical login session; on macOS 14.x or headless it falls back to the Core Audio tap (see §6.2). The `whisperkit` and `parakeet` engines are Apple-Silicon-first (runtime-gated with a clear error on Intel); `whisper` and `apple` cover Intel. |
+| **Security & Privacy** | No external network calls by default; cloud transcription backends are opt-in and use HTTPS with user-provided API keys. (Live transcription may run a local `whisper-server` bound to loopback 127.0.0.1 for performance — IPC with Aural's own child process, never an external connection; disable with `AURAL_WHISPER_SERVER=0`.) System/app audio capture requires a TCC permission that depends on the backend (§6.2): the Core Audio tap uses the narrower "System Audio Recording" permission (and works headless); the ScreenCaptureKit backend requires the broader "Screen Recording" permission and a GUI session. Both are terminal-attributed for unbundled CLIs and their approval flows are documented. The `apple` engine uses the Speech Recognition TCC permission; `whisperkit` and `parakeet` download CoreML models from Hugging Face on first use (model fetch only, then fully local). |
 | **Maintainability** | Single Swift binary built with SwiftPM; modular targets: `DeviceManager`, `TapEngine`, `Encoders`, `CLI`. Well-documented code. The CoreML engines add the `argmaxinc/argmax-oss-swift` (whisperkit) and `FluidInference/FluidAudio` (parakeet) SwiftPM dependencies, currently always linked (a lean/trait-gated build is a future option — they increase binary size). |
 | **Installability** | Distributed via Homebrew (`brew install aural`) and direct download from GitHub Releases; binary is signed and notarized so TCC permission flows work cleanly. |
 | **Auditability** | All recorded file paths and durations are logged to STDERR when `-v` is enabled. |

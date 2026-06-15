@@ -169,6 +169,22 @@
 - [ ] Release automation: GitHub Releases with binary artifacts; tag v1.0.0-beta
 - [ ] Fill PRD Author field and re-review acceptance criteria US01–US07 against implementation
 
+## Phase 7: Hybrid system capture (ScreenCaptureKit + Core Audio)
+
+> Bug: `aural --system --mix` only captured the mic while system audio was
+> playing — the Core Audio aggregate is clocked by the process tap, which idles
+> when nothing plays, so the IOProc (and the mic sub-device) stop. Fix +
+> modernize with a dual-backend design. Default engine/capture behavior is
+> otherwise unchanged.
+
+- [x] PRD/docs: §6.2 two-backend model + `--capture-backend`; §7 Compatibility/Security (Screen Recording vs System Audio Recording, headless); docs/permissions.md both flows; min OS stays 14.4 (SCKit gated on 15+)
+- [ ] Step 1 — Core Audio tap fix (Option A): make the **microphone the aggregate's clock master** for `--mix` (was the tap), pin nominal rate to max(tap, mic); continuous mic capture regardless of system activity, headless-safe. This alone fixes the reported bug
+- [ ] Step 2 — `ScreenCaptureSession` (`@available(macOS 15)`): `SCStream` system/app audio via `SCContentFilter` (system/`--app`/`--exclude-app`), `.audio` → `CMSampleBuffer` → `PCMStreamConverter`; Screen Recording permission helper; reachable via `--capture-backend sckit`
+- [ ] Step 3 — SCKit integrated mic + `--mix`: `captureMicrophone`/`microphoneCaptureDeviceID` + `.microphone` output; app-level mixer summing synchronized system+mic
+- [ ] Step 4 — `--capture-backend auto|sckit|coreaudio` (+ `$AURAL_CAPTURE`); auto prefers SCKit when (macOS 15 ∧ GUI session ∧ Screen Recording) else notify + fall back to Core Audio; runtime SCKit failure also falls back
+- [ ] Step 5 — docs/tests: README/man (`--capture-backend`, both permissions, headless note); backend-selection + mixer unit tests; `Scripts/verify-live.sh` covers both; re-run the 60-min mic/system drift validation for both `--mix` paths
+- [ ] `aural apps` stays HAL-based (headless-friendly); the SCKit backend maps bundle id/PID → `SCRunningApplication` internally
+
 ## Future
 
 > Nice-to-have items outside current scope.

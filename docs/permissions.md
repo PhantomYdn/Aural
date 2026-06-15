@@ -14,14 +14,21 @@ your terminal. If it was denied, re-enable it under:
 
 > System Settings → Privacy & Security → Microphone → *your terminal* → on
 
-## System Audio Recording (`--system`, `--app`, `--exclude-app`)
+## System / app audio capture (`--system`, `--app`, `--exclude-app`)
 
-Service: `kTCCServiceAudioCapture` ("System Audio Recording Only").
+System/app capture uses one of two backends (`--capture-backend`, default
+`auto`), each with its own permission. `auto` prefers ScreenCaptureKit when it
+is available (macOS 15+, a GUI session, and Screen Recording granted) and
+otherwise falls back to the Core Audio tap, printing a notice.
 
-**macOS does not show a prompt for terminal-attributed CLIs** — and worse,
-a missing permission does not produce an error: the process tap silently
-delivers all-zero samples. Aural detects an entirely-silent system capture
-and prints a warning with these instructions:
+### Core Audio tap — "System Audio Recording" (headless-capable)
+
+Service: `kTCCServiceAudioCapture` ("System Audio Recording Only"). The narrower
+permission; works headless (cron/launchd/SSH) and on macOS 14.4+.
+
+**macOS does not show a prompt for terminal-attributed CLIs** — and a missing
+permission does not produce an error: the process tap silently delivers
+all-zero samples. Aural detects an entirely-silent system capture and warns:
 
 1. Open **System Settings → Privacy & Security → Screen & System Audio
    Recording**
@@ -36,6 +43,18 @@ sqlite3 "$HOME/Library/Application Support/com.apple.TCC/TCC.db" \
   "SELECT client, auth_value FROM access WHERE service='kTCCServiceAudioCapture';"
 # auth_value 2 = allowed
 ```
+
+### ScreenCaptureKit — "Screen Recording" (macOS 15+, GUI session only)
+
+Service: `kTCCServiceScreenCapture`. The broader Screen Recording permission;
+ScreenCaptureKit needs it for any capture, including audio-only, and only works
+inside a graphical login session (not headless/SSH/LaunchDaemon).
+
+> System Settings → Privacy & Security → Screen & System Audio Recording →
+> *your terminal* → on, then restart the terminal.
+
+Force the headless-capable Core Audio backend (skipping Screen Recording) with
+`--capture-backend coreaudio` or `AURAL_CAPTURE=coreaudio`.
 
 ## Speech Recognition (`--engine apple`)
 
