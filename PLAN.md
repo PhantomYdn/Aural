@@ -104,20 +104,6 @@
 - [x] Tests: `StreamSegmenter` boundaries/clock (5), `LiveTranscriptWriter` srt/json/txt (4), server discovery + free-port + multipart body (5), whisper-gated live integration (segmenter→whisper→writer) and server-loopback integration (both skip without engine/model). `make test` green — 97 tests, 27 suites
 - [ ] Live-capture e2e of the segmenter (real mic/system) — on the pending-live list; the live PATH can't be exercised permission-free through the binary (covered offline by the integration tests feeding PCM directly)
 
-## Phase 5: Release Engineering & Public Beta (PRD M5)
-
-- [x] Set up GitHub Actions CI: build + test on a macOS 14 (Apple-Silicon) runner with the Swift 6 toolchain (`.github/workflows/ci.yml`); gated integration tests skip without their tools so the suite stays green
-- [ ] Code signing and notarization so TCC permission flows work cleanly (PRD §7 Installability)
-- [ ] Create Homebrew formula; verify `brew install aural` end-to-end (US05)
-- [x] Write man page following POSIX utility conventions (`man/aural.1`; renders clean under mandoc)
-- [x] Write README: install, TCC permission setup, usage examples, engines, config/env precedence, exit codes (`README.md`)
-- [ ] Provide example scripts: meeting recording, transcription pipeline, cron/launchd setup
-- [ ] Validate unattended operation from cron/launchd after TCC grant (US05)
-- [ ] Reliability test: 24-hour continuous recording produces valid file on SIGINT/SIGTERM (PRD §7)
-- [ ] Performance validation: < 3% CPU on Apple Silicon at 16 kHz mono; buffering < 100 ms (PRD §7)
-- [ ] Release automation: GitHub Releases with binary artifacts; tag v1.0.0-beta
-- [ ] Fill PRD Author field and re-review acceptance criteria US01–US07 against implementation
-
 ## Phase 6: Multi-Engine & Multi-Language Transcription (PRD M6)
 
 > Adds language coverage and selectable recognition engines behind `--engine`.
@@ -155,9 +141,30 @@
 - [ ] Arch gate: clear error on Intel; keep whisper/apple working
 - [ ] Tests: gated integration (tiny model download); revisit notarization/Homebrew + binary size (links to Phase 5)
 
-### Phase 6.4 — `parakeet` (deferred)
+### Phase 6.4 — `parakeet` engine (FluidAudio CoreML)
 
-- [ ] NVIDIA Parakeet via FluidAudio (CoreML); European-multilingual; no translate — schedule separately
+- [ ] NVIDIA Parakeet via `FluidInference/FluidAudio` (CoreML/ANE); `ParakeetBackend` loads models once (resident), `AsrManager.transcribe`
+- [ ] European-multilingual (v3, 25 languages) + English-only (v2 via `--model v2`); autoDetect, no `--language` selection (warned/ignored), no `--translate`
+- [ ] srt/json built from token timings; Arch gate (Apple-Silicon-only); cache pinned under `~/.aural/models/parakeet`; `aural models list` shows it
+- [ ] Tests: capability/format guards + version mapping (pure); env-gated integration (model download)
+
+## Phase 5: Release Engineering & Public Beta (PRD M5)
+
+> Resequenced to run after the engine work (Phase 6): signing, notarization,
+> Homebrew, and release automation must account for the CoreML engine
+> dependencies (binary size / arch).
+
+- [x] Set up GitHub Actions CI: build + test on a macOS 14 (Apple-Silicon) runner with the Swift 6 toolchain (`.github/workflows/ci.yml`); gated integration tests skip without their tools so the suite stays green
+- [ ] Code signing and notarization so TCC permission flows work cleanly (PRD §7 Installability)
+- [ ] Create Homebrew formula; verify `brew install aural` end-to-end (US05)
+- [x] Write man page following POSIX utility conventions (`man/aural.1`; renders clean under mandoc)
+- [x] Write README: install, TCC permission setup, usage examples, engines, config/env precedence, exit codes (`README.md`)
+- [ ] Provide example scripts: meeting recording, transcription pipeline, cron/launchd setup
+- [ ] Validate unattended operation from cron/launchd after TCC grant (US05)
+- [ ] Reliability test: 24-hour continuous recording produces valid file on SIGINT/SIGTERM (PRD §7)
+- [ ] Performance validation: < 3% CPU on Apple Silicon at 16 kHz mono; buffering < 100 ms (PRD §7)
+- [ ] Release automation: GitHub Releases with binary artifacts; tag v1.0.0-beta
+- [ ] Fill PRD Author field and re-review acceptance criteria US01–US07 against implementation
 
 ## Future
 

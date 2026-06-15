@@ -10,7 +10,10 @@ let package = Package(
         .executable(name: "aural", targets: ["CLI"])
     ],
     dependencies: [
-        .package(url: "https://github.com/apple/swift-argument-parser.git", from: "1.5.0")
+        .package(url: "https://github.com/apple/swift-argument-parser.git", from: "1.5.0"),
+        // Optional CoreML transcription engine (PRD §6.6 `whisperkit`); always
+        // linked for now (PLAN Phase 6.3). Apple-Silicon-first.
+        .package(url: "https://github.com/argmaxinc/argmax-oss-swift.git", from: "0.9.0"),
     ],
     targets: [
         // Audio device & process enumeration (CoreAudio HAL).
@@ -24,6 +27,7 @@ let package = Package(
             name: "CLI",
             dependencies: [
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
+                .product(name: "WhisperKit", package: "argmax-oss-swift"),
                 "DeviceManager",
                 "TapEngine",
                 "Encoders",

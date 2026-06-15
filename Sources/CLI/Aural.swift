@@ -142,8 +142,8 @@ struct Aural: ParsableCommand {
     // MARK: Transcription engine
 
     @Option(name: [.short, .long], help: ArgumentHelp(
-        "Transcription engine: whisper (local) or apple (on-device, no deps). whisperkit is "
-            + "planned; cloud is post-MVP. Default whisper; or $AURAL_ENGINE / aural config.",
+        "Transcription engine: whisper (local), apple (on-device), or whisperkit (CoreML, "
+            + "Apple Silicon). cloud is post-MVP. Default whisper; or $AURAL_ENGINE / aural config.",
         valueName: "engine"))
     var engine: String?
 

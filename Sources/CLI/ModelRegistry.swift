@@ -1,11 +1,13 @@
 import Foundation
 
-/// A whisper ggml model present in the local model directory.
+/// A transcription model present in the local model directory.
 struct LocalModel: Codable {
     let name: String
     let path: String
     let sizeBytes: Int
-    /// True if this is the active model (`$AURAL_WHISPER_MODEL` resolves here).
+    /// Engine the model belongs to (`whisper`, `whisperkit`, `parakeet`).
+    let engine: String
+    /// True if this is the active default model (env/config resolves here).
     let current: Bool
 }
 
@@ -137,10 +139,44 @@ enum ModelRegistry {
                     .dropFirst("ggml-".count).dropLast(".bin".count)
                 let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
                 return LocalModel(
-                    name: String(stripped), path: url.path, sizeBytes: size,
+                    name: String(stripped), path: url.path, sizeBytes: size, engine: "whisper",
                     current: currentCanonical == url.resolvingSymlinksInPath().path)
             }
             .sorted { $0.name < $1.name }
+    }
+
+    /// Lists CoreML model bundles cached under `directory` for `engine`
+    /// (whisperkit/parakeet). A "model" is the directory containing one or more
+    /// `.mlmodelc` bundles; best-effort, returns empty when nothing is cached.
+    static func coreMLModels(
+        engine: String, directory: URL, fileManager: FileManager = .default
+    ) -> [LocalModel] {
+        guard let walker = fileManager.enumerator(
+            at: directory, includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]) else { return [] }
+        var variants = Set<URL>()
+        for case let url as URL in walker where url.pathExtension == "mlmodelc" {
+            variants.insert(url.deletingLastPathComponent())
+        }
+        return variants
+            .map { dir in
+                LocalModel(
+                    name: dir.lastPathComponent, path: dir.path,
+                    sizeBytes: directorySize(dir, fileManager: fileManager),
+                    engine: engine, current: false)
+            }
+            .sorted { $0.name < $1.name }
+    }
+
+    /// Total size in bytes of the files under `url` (recursive).
+    static func directorySize(_ url: URL, fileManager: FileManager = .default) -> Int {
+        guard let walker = fileManager.enumerator(
+            at: url, includingPropertiesForKeys: [.fileSizeKey]) else { return 0 }
+        var total = 0
+        for case let file as URL in walker {
+            total += (try? file.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+        }
+        return total
     }
 
     /// Human-readable byte size (e.g. "142 MB").

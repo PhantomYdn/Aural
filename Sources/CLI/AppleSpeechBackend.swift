@@ -70,7 +70,7 @@ final class AppleSpeechBackend: TranscriptionBackend {
         // Wait for completion, pumping the run loop so a main-queue callback
         // still runs (avoids deadlocking the CLI's main thread). Results arrive
         // off-main in practice; the pump handles either case.
-        guard Self.waitPumping(timeout: 120, until: { box.get() != nil }) else {
+        guard RunLoopBridge.waitPumping(timeout: 120, until: { box.get() != nil }) else {
             task.cancel()
             throw AuralError.software("apple recognition timed out.")
         }
@@ -115,7 +115,7 @@ final class AppleSpeechBackend: TranscriptionBackend {
         case .notDetermined:
             let box = LockBox<SFSpeechRecognizerAuthorizationStatus>()
             SFSpeechRecognizer.requestAuthorization { box.set($0) }
-            _ = waitPumping(timeout: 120, until: { box.get() != nil })
+            _ = RunLoopBridge.waitPumping(timeout: 120, until: { box.get() != nil })
             guard box.get() == .authorized else {
                 throw AuralError.noPermission(deniedMessage)
             }
@@ -146,35 +146,5 @@ final class AppleSpeechBackend: TranscriptionBackend {
             return byLang
         }
         return Locale(identifier: language)
-    }
-
-    /// Spins the current run loop until `until()` is true or `timeout` elapses,
-    /// so callbacks delivered on the main queue still execute.
-    private static func waitPumping(timeout: TimeInterval, until: () -> Bool) -> Bool {
-        let deadline = Date().addingTimeInterval(timeout)
-        while !until() {
-            if Date() >= deadline { return false }
-            RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.02))
-        }
-        return true
-    }
-}
-
-/// Minimal thread-safe one-shot holder for bridging Speech callbacks to the
-/// synchronous CLI flow.
-final class LockBox<T>: @unchecked Sendable {
-    private let lock = NSLock()
-    private var value: T?
-
-    func set(_ newValue: T) {
-        lock.lock()
-        defer { lock.unlock() }
-        if value == nil { value = newValue }  // keep the first (final) result
-    }
-
-    func get() -> T? {
-        lock.lock()
-        defer { lock.unlock() }
-        return value
     }
 }

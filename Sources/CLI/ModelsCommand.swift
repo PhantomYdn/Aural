@@ -51,6 +51,8 @@ struct ModelsList: ParsableCommand {
 
     private func listLocal() throws {
         let models = ModelRegistry.localModels()
+            + ModelRegistry.coreMLModels(
+                engine: "whisperkit", directory: WhisperKitBackend.downloadBase)
         if json {
             print(try OutputFormatting.json(models))
             return
@@ -63,7 +65,7 @@ struct ModelsList: ParsableCommand {
             return
         }
         let rows = models.map {
-            [$0.name, "whisper", ModelRegistry.formatBytes($0.sizeBytes),
+            [$0.name, $0.engine, ModelRegistry.formatBytes($0.sizeBytes),
              $0.current ? "*" : "", $0.path]
         }
         print(OutputFormatting.table(

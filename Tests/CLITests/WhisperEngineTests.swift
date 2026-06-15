@@ -315,9 +315,10 @@ struct EngineSpecTests {
         #expect(spec?.capabilities.autoDetect == false)
     }
 
-    @Test func whisperkitKnownButNotImplemented() {
-        #expect(EngineSpec.named("whisperkit")?.isImplemented == false)
+    @Test func whisperkitImplementedAndCapable() {
+        #expect(EngineSpec.named("whisperkit")?.isImplemented == true)
         #expect(EngineSpec.named("whisperkit")?.capabilities.translate == true)
+        #expect(EngineSpec.named("whisperkit")?.capabilities.autoDetect == true)
     }
 
     @Test func unknownEngineIsNil() {
@@ -339,7 +340,7 @@ struct EngineSpecTests {
 
     @Test func resolveRejectsUnimplementedEngine() {
         #expect(throws: AuralError.self) {
-            _ = try TranscribeEngine.resolveWhisper(engineName: "whisperkit", modelFlag: nil)
+            _ = try TranscribeEngine.resolveWhisper(engineName: "cloud", modelFlag: nil)
         }
     }
 }

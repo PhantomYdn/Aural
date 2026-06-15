@@ -34,8 +34,7 @@ struct EngineSpec {
         EngineSpec(
             name: "whisperkit",
             capabilities: EngineCapabilities(autoDetect: true, translate: true, usesModelFile: true),
-            isImplemented: false,
-            plannedNote: "the 'whisperkit' engine (CoreML) is planned — see PLAN Phase 6.3"),
+            isImplemented: true, plannedNote: nil),
         EngineSpec(
             name: "cloud",
             capabilities: EngineCapabilities(autoDetect: true, translate: true, usesModelFile: false),
@@ -119,6 +118,8 @@ enum TranscriptionEngine {
                 modelPath: whisper.modelPath, language: language, translate: translate)
         case "apple":
             _ = try AppleSpeechBackend.make(language: language)
+        case "whisperkit":
+            try Platform.requireAppleSilicon(engine: "whisperkit")
         default:
             break
         }
@@ -138,6 +139,8 @@ enum TranscriptionEngine {
             return WhisperCLIBackend(engine: engine, quietStderr: false)
         case "apple":
             return try AppleSpeechBackend.make(language: language)
+        case "whisperkit":
+            return try WhisperKitBackend.make(model: rawModel(modelFlag))
         default:
             throw AuralError.software("engine '\(engineName)' has no batch backend.")
         }
@@ -171,9 +174,20 @@ enum TranscriptionEngine {
             return WhisperCLIBackend(engine: engine, quietStderr: quiet)
         case "apple":
             return try AppleSpeechBackend.make(language: language)
+        case "whisperkit":
+            return try WhisperKitBackend.make(model: rawModel(modelFlag))
         default:
             throw AuralError.software("engine '\(engineName)' has no live backend.")
         }
+    }
+
+    /// Resolves a non-whisper model name (no ggml file lookup): flag, then
+    /// `$AURAL_WHISPER_MODEL`, then the config default; nil lets the engine pick.
+    static func rawModel(_ flag: String?) -> String? {
+        if let flag, !flag.isEmpty { return flag }
+        let env = ProcessInfo.processInfo.environment["AURAL_WHISPER_MODEL"]
+        if let env, !env.isEmpty { return env }
+        return Configuration.load().model
     }
 
     /// Validates the engine is recognized and implemented, returning its name.
