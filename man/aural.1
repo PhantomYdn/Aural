@@ -97,11 +97,13 @@ Default \-50.
 .BI \-e ", " \-\-engine " ENGINE"
 Recognition engine:
 .B whisper
-(local whisper.cpp, default) or
+(local whisper.cpp, default),
 .B apple
-(native on\-device Speech.framework).
+(native on\-device Speech.framework),
 .B whisperkit
-is planned and
+or
+.B parakeet
+(CoreML, Apple Silicon).
 .B cloud
 is post\-MVP.
 .TP

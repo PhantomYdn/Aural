@@ -136,17 +136,17 @@
 
 ### Phase 6.3 — `whisperkit` engine (SwiftPM dep)
 
-- [ ] Add `argmaxinc/argmax-oss-swift` (product `WhisperKit`); `WhisperKitBackend` loads model once (resident), transcribes segments
-- [ ] `DecodingOptions(task:language:)`; async→sync bridge; model auto-download; `aural models` lists WhisperKit cache
-- [ ] Arch gate: clear error on Intel; keep whisper/apple working
-- [ ] Tests: gated integration (tiny model download); revisit notarization/Homebrew + binary size (links to Phase 5)
+- [x] Add `argmaxinc/argmax-oss-swift` (product `WhisperKit`, always-on dep); `WhisperKitBackend` loads the model once (resident) into `~/.aural/models/whisperkit`; shared async→sync bridge (`RunLoopBridge`) + `UncheckedSendableBox`
+- [x] `DecodingOptions(task:language:detectLanguage:skipSpecialTokens:)`; srt/json from `TranscriptionResult.segments`; residual special tokens stripped; `aural models list` shows the WhisperKit cache
+- [x] Arch gate: clear error on Intel (`Platform.requireAppleSilicon`); whisper/apple unaffected; dispatch generalized in `preflight/makeBatch/makeLive`
+- [x] Tests: languageCode/clean + TranscriptFormatting + coreMLModels (pure); env-gated integration (`AURAL_TEST_WHISPERKIT=1`). Verified live: `aural -i clip --engine whisperkit --model tiny` transcribes on-device, srt/json clean
 
 ### Phase 6.4 — `parakeet` engine (FluidAudio CoreML)
 
-- [ ] NVIDIA Parakeet via `FluidInference/FluidAudio` (CoreML/ANE); `ParakeetBackend` loads models once (resident), `AsrManager.transcribe`
-- [ ] European-multilingual (v3, 25 languages) + English-only (v2 via `--model v2`); autoDetect, no `--language` selection (warned/ignored), no `--translate`
-- [ ] srt/json built from token timings; Arch gate (Apple-Silicon-only); cache pinned under `~/.aural/models/parakeet`; `aural models list` shows it
-- [ ] Tests: capability/format guards + version mapping (pure); env-gated integration (model download)
+- [x] NVIDIA Parakeet via `FluidInference/FluidAudio` (CoreML/ANE); `ParakeetBackend` loads models once (resident actor), `AsrManager.transcribe(url, decoderState:)`
+- [x] European-multilingual (v3, 25 languages) + English-only (v2 via `--model v2`); autoDetect, no `--language` selection (warned/ignored), `--translate` rejected (capability)
+- [x] srt/json built from `ASRResult.tokenTimings` (grouped into cues); arch gate (Apple-Silicon-only); FluidAudio manages its own cache (`~/Library/Application Support/FluidAudio/Models` — it ignores a custom dir when models already exist), which `aural models list` reads and shows
+- [x] Tests: version mapping + language notice + token-timing→cues (pure); EngineSpec; env-gated integration (`AURAL_TEST_PARAKEET=1`). `make test` green — 171 tests, 41 suites. Verified live: `aural -i clip --engine parakeet` transcribes on-device, srt cues, --translate rejected, models list shows the cache
 
 ## Phase 5: Release Engineering & Public Beta (PRD M5)
 

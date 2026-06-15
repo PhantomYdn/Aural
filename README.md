@@ -124,7 +124,8 @@ input; it is normalized to 16 kHz mono internally.
 |--------|---------|-----------|-------------|--------------|-------|
 | `whisper` (default) | whisper.cpp binary (`whisper-cli`/`whisper-server`) | ~99 | yes (`--language auto`) | yes | needs a non-`.en` model for non-English |
 | `apple` | native `Speech.framework` (no deps) | ~50 locales | no (uses the locale) | no | on-device; plain-text only in batch |
-| `whisperkit` | CoreML (planned, Phase 6.3) | ~99 | yes | yes | Apple-Silicon-first |
+| `whisperkit` | WhisperKit CoreML | ~99 | yes | yes | Apple-Silicon-first; models auto-download |
+| `parakeet` | FluidAudio CoreML | 25 European (v3) / English (v2) | yes | no | Apple-Silicon-first; `--model v2`/`v3` |
 | `cloud` | post-MVP | — | — | — | — |
 
 - `whisper` is found on `PATH` (`whisper-cli`/`whisper-cpp`, and
@@ -132,7 +133,11 @@ input; it is normalized to 16 kHz mono internally.
   / `$AURAL_WHISPER_SERVER_BIN`. Disable the server with `$AURAL_WHISPER_SERVER=0`.
 - `apple` needs the Speech Recognition permission and runs entirely on-device
   (no network). Batch transcription writes plain text; for `.srt`/`.json` from a
-  file, use `--engine whisper`. Live `.srt`/`.json` works with either engine.
+  file, use another engine. Live `.srt`/`.json` works with any engine.
+- `whisperkit` and `parakeet` are CoreML engines (Apple Silicon only). They
+  download their models from Hugging Face on first use, then run fully
+  on-device. `parakeet` auto-detects its language (`--language` is ignored) and
+  cannot translate.
 
 ## Models
 
