@@ -42,7 +42,7 @@ final class LiveTranscriber: AudioSink, @unchecked Sendable {
         minSegmentSeconds: Double = 0.4
     ) throws {
         self.transcriber = try TranscriptionEngine.makeLive(
-            engineName: engineName, modelFlag: modelFlag, quiet: !Log.isVerbose)
+            engineName: engineName, modelFlag: modelFlag, language: language, quiet: !Log.isVerbose)
         self.language = language
         self.translate = translate
         self.format = captureFormat

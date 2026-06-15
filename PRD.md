@@ -267,7 +267,7 @@ All invocations accept `-h, --help` and `-v, --verbose`.
 
 - An `.en` whisper model ignores `--language`; Aural warns when a non-English language is requested with such a model.
 - `--translate` is rejected with a clear error on engines that don't support it (`apple`).
-- `apple` requires the macOS Speech Recognition TCC permission (docs/permissions.md) and on-device locale assets; `whisperkit` (and future `parakeet`) are Apple-Silicon-first.
+- `apple` requires the macOS Speech Recognition TCC permission (docs/permissions.md) and on-device locale assets; it runs fully on-device (`requiresOnDeviceRecognition`, no network) and recognizes in one locale (`--language CODE` → locale, e.g. `de`→`de-DE`; `auto` uses the current locale). It produces plain text: batch (`-i`) rejects `--transcript-format srt|json` with a clear hint, while live `-t out.srt`/`.json` still works (timestamps come from Aural's segmenter). `whisperkit` (and future `parakeet`) are Apple-Silicon-first.
 - `whisperkit` loads its CoreML model once and reuses it across live segments (model-resident, like the whisper-server backend).
 
 ---

@@ -307,10 +307,10 @@ struct EngineSpecTests {
         #expect(spec?.capabilities.autoDetect == true)
     }
 
-    @Test func appleIsKnownButNotImplementedAndCannotTranslate() {
+    @Test func appleIsImplementedButCannotTranslateOrAutoDetect() {
         let spec = EngineSpec.named("apple")
         #expect(spec != nil)
-        #expect(spec?.isImplemented == false)
+        #expect(spec?.isImplemented == true)
         #expect(spec?.capabilities.translate == false)
         #expect(spec?.capabilities.autoDetect == false)
     }
@@ -339,7 +339,7 @@ struct EngineSpecTests {
 
     @Test func resolveRejectsUnimplementedEngine() {
         #expect(throws: AuralError.self) {
-            _ = try TranscribeEngine.resolveWhisper(engineName: "apple", modelFlag: nil)
+            _ = try TranscribeEngine.resolveWhisper(engineName: "whisperkit", modelFlag: nil)
         }
     }
 }

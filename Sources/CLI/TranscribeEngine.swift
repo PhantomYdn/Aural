@@ -26,13 +26,12 @@ struct TranscribeEngine {
     let translate: Bool
     let format: TranscriptOutputFormat
 
-    /// Normalizes `audioPath` to a whisper-ready WAV, runs the engine, and
-    /// returns the transcript text in the requested format.
+    /// Normalizes `audioPath` to a 16 kHz mono WAV, runs the selected engine,
+    /// and returns the transcript text in the requested format.
     func transcribe(audioPath: String) throws -> String {
-        let whisper = try Self.resolveWhisper(engineName: engineName, modelFlag: modelFlag)
-        ModelRegistry.warnIfModelLanguageMismatch(
-            modelPath: whisper.modelPath, language: language, translate: translate)
-        let backend = WhisperCLIBackend(engine: whisper, quietStderr: false)
+        let backend = try TranscriptionEngine.makeBatch(
+            engineName: engineName, modelFlag: modelFlag, language: language, translate: translate)
+        defer { backend.shutdown() }
         Log.verbose("normalizing '\(audioPath)' to 16 kHz mono WAV")
         let wavFile = try AudioPipeline.normalizeFileForWhisper(audioPath)
         defer { try? FileManager.default.removeItem(at: wavFile) }

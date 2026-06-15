@@ -12,5 +12,7 @@
     <string>Aural records audio from your microphone when you run 'aural'.</string>
     <key>NSAudioCaptureUsageDescription</key>
     <string>Aural captures system and per-application audio when you run 'aural --system' or '--app'.</string>
+    <key>NSSpeechRecognitionUsageDescription</key>
+    <string>Aural transcribes audio on-device when you run 'aural --engine apple'.</string>
 </dict>
 </plist>

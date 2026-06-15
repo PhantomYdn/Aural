@@ -30,8 +30,7 @@ struct EngineSpec {
         EngineSpec(
             name: "apple",
             capabilities: EngineCapabilities(autoDetect: false, translate: false, usesModelFile: false),
-            isImplemented: false,
-            plannedNote: "the 'apple' engine (native Speech.framework) is planned — see PLAN Phase 6.2"),
+            isImplemented: true, plannedNote: nil),
         EngineSpec(
             name: "whisperkit",
             capabilities: EngineCapabilities(autoDetect: true, translate: true, usesModelFile: true),
@@ -101,39 +100,91 @@ final class WhisperCLIBackend: TranscriptionBackend {
     var label: String { "whisper-cli (per-call)" }
 }
 
-/// Resolves a `TranscriptionBackend` for the selected engine. Only `whisper`
-/// is implemented today; other named engines yield a clear "planned" error via
-/// `TranscribeEngine.resolveWhisper`.
+/// Resolves a `TranscriptionBackend` for the selected engine, dispatching on
+/// the engine name. `whisper` (CLI/server) and `apple` (Speech.framework) are
+/// implemented; other named engines yield a clear "planned" error.
 enum TranscriptionEngine {
-    /// Batch (whole-file) backend: a single CLI invocation. Engine STDERR
-    /// passes through for progress/debugging.
-    static func makeBatch(engineName: String, modelFlag: String?) throws -> TranscriptionBackend {
-        let engine = try TranscribeEngine.resolveWhisper(
-            engineName: engineName, modelFlag: modelFlag)
-        return WhisperCLIBackend(engine: engine, quietStderr: false)
+    /// Validates an engine is usable before any capture/work (fail fast):
+    /// whisper resolves its binary+model (and warns on a `.en`/language
+    /// mismatch); apple checks Speech authorization and locale support so its
+    /// permission prompt happens before recording starts.
+    static func preflight(
+        engineName: String, modelFlag: String?, language: String?, translate: Bool
+    ) throws {
+        switch try requireImplemented(engineName) {
+        case "whisper":
+            let whisper = try TranscribeEngine.resolveWhisper(
+                engineName: engineName, modelFlag: modelFlag)
+            ModelRegistry.warnIfModelLanguageMismatch(
+                modelPath: whisper.modelPath, language: language, translate: translate)
+        case "apple":
+            _ = try AppleSpeechBackend.make(language: language)
+        default:
+            break
+        }
     }
 
-    /// Live backend: prefers the model-resident `whisper-server` (loads the
-    /// model once) when available and not disabled via `AURAL_WHISPER_SERVER=0`,
-    /// falling back to per-segment `whisper-cli`. A server start failure also
-    /// falls back, so transcription is never blocked by the optimization.
-    static func makeLive(
-        engineName: String, modelFlag: String?, quiet: Bool
+    /// Batch (whole-file) backend. whisper: a single CLI invocation (STDERR
+    /// passes through). apple: an on-device recognizer for the locale.
+    static func makeBatch(
+        engineName: String, modelFlag: String?, language: String?, translate: Bool
     ) throws -> TranscriptionBackend {
-        let engine = try TranscribeEngine.resolveWhisper(
-            engineName: engineName, modelFlag: modelFlag)
-        let environment = ProcessInfo.processInfo.environment
-        let disabled = environment["AURAL_WHISPER_SERVER"] == "0"
-        if !disabled, let serverBinary = WhisperEngine.discoverServer(environment: environment) {
-            do {
-                let server = try WhisperServerEngine.start(
-                    serverBinary: serverBinary, modelPath: engine.modelPath, quiet: quiet)
-                Log.verbose("live engine: \(server.label)")
-                return server
-            } catch {
-                Log.verbose("whisper-server unavailable (\(error)); using per-segment whisper-cli")
-            }
+        switch try requireImplemented(engineName) {
+        case "whisper":
+            let engine = try TranscribeEngine.resolveWhisper(
+                engineName: engineName, modelFlag: modelFlag)
+            ModelRegistry.warnIfModelLanguageMismatch(
+                modelPath: engine.modelPath, language: language, translate: translate)
+            return WhisperCLIBackend(engine: engine, quietStderr: false)
+        case "apple":
+            return try AppleSpeechBackend.make(language: language)
+        default:
+            throw AuralError.software("engine '\(engineName)' has no batch backend.")
         }
-        return WhisperCLIBackend(engine: engine, quietStderr: quiet)
+    }
+
+    /// Live backend. whisper: prefers the model-resident `whisper-server`
+    /// (loads the model once) when available and not disabled via
+    /// `AURAL_WHISPER_SERVER=0`, falling back to per-segment `whisper-cli` (so a
+    /// server start failure never blocks transcription). apple: a resident
+    /// on-device recognizer reused across segments.
+    static func makeLive(
+        engineName: String, modelFlag: String?, language: String?, quiet: Bool
+    ) throws -> TranscriptionBackend {
+        switch try requireImplemented(engineName) {
+        case "whisper":
+            let engine = try TranscribeEngine.resolveWhisper(
+                engineName: engineName, modelFlag: modelFlag)
+            let environment = ProcessInfo.processInfo.environment
+            let disabled = environment["AURAL_WHISPER_SERVER"] == "0"
+            if !disabled, let serverBinary = WhisperEngine.discoverServer(environment: environment) {
+                do {
+                    let server = try WhisperServerEngine.start(
+                        serverBinary: serverBinary, modelPath: engine.modelPath, quiet: quiet)
+                    Log.verbose("live engine: \(server.label)")
+                    return server
+                } catch {
+                    Log.verbose(
+                        "whisper-server unavailable (\(error)); using per-segment whisper-cli")
+                }
+            }
+            return WhisperCLIBackend(engine: engine, quietStderr: quiet)
+        case "apple":
+            return try AppleSpeechBackend.make(language: language)
+        default:
+            throw AuralError.software("engine '\(engineName)' has no live backend.")
+        }
+    }
+
+    /// Validates the engine is recognized and implemented, returning its name.
+    private static func requireImplemented(_ name: String) throws -> String {
+        guard let spec = EngineSpec.named(name) else {
+            throw AuralError.usage("unknown engine '\(name)' (known: \(EngineSpec.knownNames)).")
+        }
+        guard spec.isImplemented else {
+            throw AuralError.unavailable(
+                (spec.plannedNote ?? "engine '\(name)' is not available") + "; use --engine whisper.")
+        }
+        return name
     }
 }

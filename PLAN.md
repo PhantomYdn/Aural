@@ -136,14 +136,15 @@
 - [x] Config defaults for `model`/`engine`/`language`/`translate`/`silence-threshold`/`device`, each resolved flag › env (`$AURAL_*`) › config › built-in via `ResolvedSettings`; merged-value validation catches env/config-driven conflicts; `--no-translate` overrides a configured default; malformed env values are usage errors
 - [x] Tests: arg building (auto/translate ordering), server multipart `translate`/`response_format`, capability/EngineSpec + resolve rejection, model name/path resolution + `.en` warning + `models list`; whisper-gated chain still green (118 tests, 29 suites)
 - [x] Help strings refreshed (`--engine`/`--language`/`--translate`/`--model`); PRD §6.1/§6.6 already specced in Phase 6.0; PLAN ticked. README usage examples deferred to Phase 5 (README is a Phase 5 deliverable)
-- [ ] True multilingual e2e (non-English speech → translate, multilingual model) — gated/pending a local multilingual model + live TCC; covered offline only for English via the whisper-gated chain
+- [x] True multilingual e2e — gated Swift test: German `say` clip transcribed (de) and run through `--translate` via a local multilingual model; skips without a non-`.en` model / German voice. Verified with `large-v3-turbo` (note: turbo transcribes but does not translate, so the English-content assertion is gated to non-turbo models)
 
 ### Phase 6.2 — `apple` engine (native Speech.framework, zero deps)
 
-- [ ] `AppleSpeechBackend` via `SFSpeechURLRecognitionRequest` (on-device); per-segment live + whole-file batch
-- [ ] Speech authorization + `NSSpeechRecognitionUsageDescription` in Info.plist; terminal-attributed TCC docs
-- [ ] Locale mapping (`de`→`de-DE`), `supportedLocales()` validation; reject `--translate`
-- [ ] Tests: locale mapping, capability errors; gated integration (Speech permission; likely local-only)
+- [x] `AppleSpeechBackend` via `SFSpeechURLRecognitionRequest` (`requiresOnDeviceRecognition`, no network); whole-file batch + per-segment live (resident recognizer). Backend resolution generalized: `TranscriptionEngine.preflight/makeBatch/makeLive` dispatch whisper vs apple; the `.en` warning moved into the whisper branch
+- [x] Speech authorization (prompt-if-undetermined via run-loop-pumped wait; denied → exit 77) + `NSSpeechRecognitionUsageDescription` in Info.plist; `Speech.framework` autolinks. docs/permissions.md already covers terminal-attributed TCC
+- [x] Locale mapping (`de`→`de-DE`, `auto`→current via `supportedLocales()`); `--translate` rejected (capability); batch srt/json rejected (plain-text only), live srt/json still works via Aural's segment timestamps; on-device-unavailable → actionable error
+- [x] Tests: locale mapping + capability/format guards (pure); gated on-device integration (skips unless Speech authorized + `say`). `make test` green — 155 tests, 34 suites. Verified live: `aural -i clip --engine apple` transcribes on-device, srt batch rejected, `$AURAL_ENGINE=apple` selects it
+- [x] `EngineSpec` apple → implemented; `--engine` help updated; PRD §6.6 apple notes; PLAN ticked
 
 ### Phase 6.3 — `whisperkit` engine (SwiftPM dep)
 

@@ -142,8 +142,8 @@ struct Aural: ParsableCommand {
     // MARK: Transcription engine
 
     @Option(name: [.short, .long], help: ArgumentHelp(
-        "Transcription engine: whisper (local). apple/whisperkit are planned; cloud is post-MVP "
-            + "(default whisper; or $AURAL_ENGINE / aural config).",
+        "Transcription engine: whisper (local) or apple (on-device, no deps). whisperkit is "
+            + "planned; cloud is post-MVP. Default whisper; or $AURAL_ENGINE / aural config.",
         valueName: "engine"))
     var engine: String?
 
@@ -393,15 +393,14 @@ struct Aural: ParsableCommand {
             }
         }
 
-        // Fail fast on a missing transcription engine/model before touching
-        // audio permissions or starting capture (and warn once if the model
-        // can't honor the requested language/translation).
+        // Fail fast on an unusable transcription engine before touching audio
+        // permissions or starting capture: whisper resolves its binary+model
+        // (and warns on a .en/language mismatch); apple checks Speech
+        // authorization + locale, so its prompt happens before recording.
         if outputs.transcript != nil {
-            let whisper = try TranscribeEngine.resolveWhisper(
-                engineName: settings.engine, modelFlag: model)
-            ModelRegistry.warnIfModelLanguageMismatch(
-                modelPath: whisper.modelPath, language: settings.language,
-                translate: settings.translate)
+            try TranscriptionEngine.preflight(
+                engineName: settings.engine, modelFlag: model,
+                language: settings.language, translate: settings.translate)
         }
 
         let captureEngine = CaptureEngine(

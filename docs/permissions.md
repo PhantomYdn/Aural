@@ -60,8 +60,9 @@ reattach after the restart.
 ## Notes for packaging (Phase 5)
 
 - `aural` embeds an `Info.plist` (`__TEXT,__info_plist`) with
-  `NSMicrophoneUsageDescription` and `NSAudioCaptureUsageDescription` plus a
-  bundle identifier, which is required for any future direct attribution.
+  `NSMicrophoneUsageDescription`, `NSAudioCaptureUsageDescription`, and
+  `NSSpeechRecognitionUsageDescription` plus a bundle identifier, which is
+  required for any future direct attribution.
 - A signed and notarized release binary is planned in Phase 5; that work
   should re-test whether direct attribution (prompting for `aural` itself)
   becomes available.
