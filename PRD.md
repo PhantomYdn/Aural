@@ -52,6 +52,8 @@ The tool strictly follows Unix/Linux design patterns, treating audio as a stream
 | 8 | Time-based chunking | P1 | Split recordings into sequential files by duration (`--split duration=SEC`). |
 | 9 | Transcription integration | P1 | Transcription is built into the root verb: any input (live capture or `-i` file/stream) can be transcribed by a local engine (e.g., `whisper.cpp`) via `-t/--transcript`. Audio and transcript can be produced in the same run (`-a rec.m4a -t notes.srt`); naming no output transcribes to stdout. |
 | 12 | Live transcription | P1 | During live capture, emit the transcript incrementally — as close to runtime as possible — by segmenting the stream on natural pauses and transcribing each segment as it completes (true streaming is post-MVP). |
+| 13 | Multi-language & translation | P1 | Transcribe ~99 languages with a multilingual model via `--language CODE` or auto-detect (`--language auto`, default); `--translate` emits English from any spoken language (engines that support it). `aural models list/download` manages local models. |
+| 14 | Pluggable transcription engines | P2 | Select the engine with `--engine`: `whisper` (whisper.cpp, default), `apple` (native Speech.framework, no extra deps), `whisperkit` (CoreML, on-device, multilingual + translate). Capabilities (auto-detect, translate, model semantics) vary and are validated. |
 | 10 | Silence-based splitting | P2 | Split on continuous silence exceeding a configurable threshold (`--split silence=SEC`). |
 | 11 | Basic metadata embedding | P2 | Store recording start time, source name, and sample rate in WAV INFO, MP4, or ID3 tags. |
 
@@ -63,7 +65,7 @@ The tool strictly follows Unix/Linux design patterns, treating audio as a stream
 - **Multi-channel mapping** (e.g., separate tracks for mic and system audio).
 - **Plugin system** to inject custom DSP filters (EQ, noise suppression) as middleware.
 - **Configuration profiles** to store default sources, formats, and transcription settings.
-- **Cloud transcription backends** (Deepgram, Google) selectable via a flag.
+- **Additional engines**: NVIDIA Parakeet (via FluidAudio CoreML); cloud backends (Deepgram, Google) selectable via `--engine`.
 
 ---
 
@@ -154,12 +156,13 @@ aural devices | apps | info            # inspection utilities
 - `--duration SEC` : stop live capture after SEC seconds (otherwise Ctrl+C).
 - `--split duration=SEC` / `--split silence=SEC` : split the audio file into sequentially numbered chunks (requires `-a FILE`; silence threshold via `--silence-threshold` dBFS).
 
-**Format overrides & transcription engine:**
+**Format overrides & transcription:**
 - `--format wav|m4a|flac` : force the audio format, overriding the extension.
 - `--transcript-format txt|srt|json` : force the transcript format, overriding the extension.
-- `-e, --engine whisper|cloud` : transcription engine (default `whisper`; cloud is post-MVP).
-- `--model PATH` : ggml Whisper model (default `$AURAL_WHISPER_MODEL`).
-- `--language CODE` : spoken language (default: the model's default).
+- `-e, --engine whisper|apple|whisperkit` : recognition engine (default `whisper`; `cloud` is post-MVP). Capabilities vary — see §6.6.
+- `--model NAME|PATH` : engine-specific model selector. `whisper`: ggml path or short name (`large-v3-turbo`); `whisperkit`: a WhisperKit model name (`large-v3-v20240930_626MB`); `apple`: ignored (OS assets). whisper falls back to `$AURAL_WHISPER_MODEL`.
+- `--language CODE` : spoken language (e.g. `de`); `auto` (default) detects it where the engine supports detection.
+- `--translate` : output English regardless of the spoken language (whisper/whisperkit only).
 - `--raw` : with `-a -`, stream headerless raw PCM to stdout instead of a WAV container.
 
 **Examples:**
@@ -171,6 +174,8 @@ aural -a rec.m4a -t notes.txt                # record + transcribe to files
 aural --system --mix -a mtg.m4a -t mtg.srt   # capture a meeting, keep both
 aural -i in.wav -a out.m4a                   # convert between formats
 aural -a - | ffmpeg -i - ...                 # stream WAV into a pipe
+aural -i talk.mp3 --language auto -t talk.srt        # detect language -> subtitles
+aural --system --engine whisperkit --translate -t -  # any language -> English, live
 ```
 
 **`aural devices`**
@@ -185,6 +190,11 @@ aural -a - | ffmpeg -i - ...                 # stream WAV into a pipe
 **`aural info <file>`**
 - Print duration, sample rate, channels, and metadata of an audio file.
 - `--json` : output in JSON for scripting.
+
+**`aural models`**
+- `list` : show locally available models and the engine they belong to.
+- `download <name>` : fetch a model into `~/.aural/models` (whisper ggml) or trigger the engine's own cache (whisperkit).
+- Applies to file-based engines (`whisper`, `whisperkit`); `apple` uses OS-managed assets.
 
 All invocations accept `-h, --help` and `-v, --verbose`.
 
@@ -227,6 +237,18 @@ All invocations accept `-h, --help` and `-v, --verbose`.
 - If `--engine whisper`, call a system-installed whisper.cpp binary (`whisper-cli`/`whisper-cpp` on `PATH`, or `$AURAL_WHISPER_BIN`); if not found, provide a clear error with installation instructions (e.g., `brew install whisper-cpp`). The model comes from `--model` or `$AURAL_WHISPER_MODEL`.
 - Live transcription prefers a model-resident backend when `whisper-server` is available (`$AURAL_WHISPER_SERVER_BIN` to override the path): the server is launched once on loopback (127.0.0.1) so the model loads a single time, and each segment is transcribed via a local HTTP request to its `/inference` endpoint. This is local IPC with Aural's own child process — not an external network call. It is disabled with `AURAL_WHISPER_SERVER=0`, and Aural falls back to spawning `whisper-cli` per segment whenever the server is absent or fails to start, so transcription is never blocked by the optimization.
 - STDERR from the transcription engine is passed through for debugging (suppressed for the high-volume per-segment live calls unless `-v`); a non-zero engine exit code propagates through the pipeline.
+- Recognition uses a selectable engine (`--engine`, default `whisper`). All engines share one internal primitive — "transcribe a 16 kHz mono WAV (optionally translating) → text (+ optional timestamps)" — used by both batch and live paths.
+
+| Engine | Runtime / deps | Languages | Auto-detect | Translate→EN | Model selection |
+|--------|----------------|-----------|-------------|--------------|-----------------|
+| `whisper` (default) | whisper.cpp CLI/server (external binary) | ~99 (multilingual model) | yes (`auto`) | yes | ggml path/short name; needs a non-`.en` model |
+| `apple` | native `Speech.framework` (no deps) | ~50 locales | no (chosen/current locale) | no | OS-managed on-device assets |
+| `whisperkit` | WhisperKit CoreML (SwiftPM dep) | ~99 | yes | yes | WhisperKit model name; auto-downloaded |
+
+- An `.en` whisper model ignores `--language`; Aural warns when a non-English language is requested with such a model.
+- `--translate` is rejected with a clear error on engines that don't support it (`apple`).
+- `apple` requires the macOS Speech Recognition TCC permission (docs/permissions.md) and on-device locale assets; `whisperkit` (and future `parakeet`) are Apple-Silicon-first.
+- `whisperkit` loads its CoreML model once and reuses it across live segments (model-resident, like the whisper-server backend).
 
 ---
 
@@ -237,9 +259,9 @@ All invocations accept `-h, --help` and `-v, --verbose`.
 | **Performance** | Recording must use < 3% CPU on an Apple Silicon Mac (16 kHz mono); buffering delays < 100 ms. |
 | **Reliability** | 24-hour continuous recording must produce a valid, non-corrupted file when terminated via SIGINT/SIGTERM. Resilience to hard kills (SIGKILL, power loss) is parked — see Open Questions. |
 | **Usability** | CLI help and error messages are clear, include examples, and follow POSIX utility conventions. |
-| **Compatibility** | macOS 14.4 (Sonoma) and later — required by the Core Audio process-tap API; both Intel and Apple Silicon. |
-| **Security & Privacy** | No external network calls by default; cloud transcription backends are opt-in and use HTTPS with user-provided API keys. (Live transcription may run a local `whisper-server` bound to loopback 127.0.0.1 for performance — IPC with Aural's own child process, never an external connection; disable with `AURAL_WHISPER_SERVER=0`.) System/app audio capture requires the macOS "System Audio Recording" TCC permission; the prompt and approval flow (including terminal-attributed permission for unbundled CLIs) must be documented. |
-| **Maintainability** | Single Swift binary built with SwiftPM; modular targets: `DeviceManager`, `TapEngine`, `Encoders`, `CLI`. Well-documented code. |
+| **Compatibility** | macOS 14.4 (Sonoma) and later — required by the Core Audio process-tap API; both Intel and Apple Silicon. The `whisperkit` (and future `parakeet`) engines are Apple-Silicon-first; `whisper` and `apple` cover Intel. |
+| **Security & Privacy** | No external network calls by default; cloud transcription backends are opt-in and use HTTPS with user-provided API keys. (Live transcription may run a local `whisper-server` bound to loopback 127.0.0.1 for performance — IPC with Aural's own child process, never an external connection; disable with `AURAL_WHISPER_SERVER=0`.) System/app audio capture requires the macOS "System Audio Recording" TCC permission; the prompt and approval flow (including terminal-attributed permission for unbundled CLIs) must be documented. The `apple` engine uses the Speech Recognition TCC permission; `whisperkit` downloads CoreML models from Hugging Face on first use (model fetch only, then fully local). |
+| **Maintainability** | Single Swift binary built with SwiftPM; modular targets: `DeviceManager`, `TapEngine`, `Encoders`, `CLI`. Well-documented code. The optional `whisperkit` engine adds the `argmaxinc/argmax-oss-swift` SwiftPM dependency, isolated so the default build path stays lean. |
 | **Installability** | Distributed via Homebrew (`brew install aural`) and direct download from GitHub Releases; binary is signed and notarized so TCC permission flows work cleanly. |
 | **Auditability** | All recorded file paths and durations are logged to STDERR when `-v` is enabled. |
 
@@ -263,6 +285,7 @@ All invocations accept `-h, --help` and `-v, --verbose`.
 | **M3 – Formats & Chunking** | M4A/FLAC output, MP3/Opus (static libs), time-based splitting, transcoding via `-i in -a out` | Week 5–6 | M1 |
 | **M4 – Transcription MVP** | Root-verb transcription with local Whisper support; stdin/file/live input; combined `-a`+`-t` | Week 7 | M3 |
 | **M5 – Polish & Release** | Code signing & notarization, Homebrew formula, man page, example scripts, CI/CD, public beta | Week 8–9 | M2, M3, M4 |
+| **M6 – Engines & Languages** | Engine abstraction; multilingual + `--translate` + `--language auto` on whisper; `aural models`; `apple` (Speech.framework) and `whisperkit` (CoreML) engines | Post-M5 | M4 |
 | **Post-MVP** | Daemon mode (launchd scheduled recording), silence VAD, streaming transcription, cloud backends, configuration profiles | Ongoing | M5 |
 
 ---

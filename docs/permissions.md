@@ -37,6 +37,19 @@ sqlite3 "$HOME/Library/Application Support/com.apple.TCC/TCC.db" \
 # auth_value 2 = allowed
 ```
 
+## Speech Recognition (`--engine apple`)
+
+Service: `kTCCServiceSpeechRecognition`.
+
+The `apple` engine uses macOS on-device speech recognition, which needs the
+Speech Recognition permission — attributed to your terminal, like the mic:
+
+> System Settings → Privacy & Security → Speech Recognition → *your terminal* → on
+
+The first use triggers the prompt; on-device locale assets may download on
+first use of a language. The `whisper` and `whisperkit` engines don't need
+this permission.
+
 ## Multiplexers (tmux, screen)
 
 Permission attribution resolves through tmux/screen to the terminal that

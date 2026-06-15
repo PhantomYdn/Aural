@@ -116,6 +116,43 @@
 - [ ] Release automation: GitHub Releases with binary artifacts; tag v1.0.0-beta
 - [ ] Fill PRD Author field and re-review acceptance criteria US01–US07 against implementation
 
+## Phase 6: Multi-Engine & Multi-Language Transcription (PRD M6)
+
+> Adds language coverage and selectable recognition engines behind `--engine`.
+> Default engine stays `whisper`; existing behavior unchanged.
+
+### Phase 6.0 — PRD & plan (docs first)
+
+- [x] PRD: FR rows 13–14, §6.1 flags + `aural models`, §6.6 engine matrix, §7 NFR, §9 M6, §4.2
+- [x] docs/permissions.md: Speech Recognition section
+
+### Phase 6.1 — Engine abstraction + multilingual `whisper` (no new deps)
+
+- [ ] `TranscriptionBackend` protocol + capability descriptor; route batch (`runFileInput`) and live (`LiveTranscriber`) through it; whisper CLI+server refactored as a backend
+- [ ] `--language auto` default + `--language CODE`; `--translate` (`-tr` CLI / `task` server); capability validation (reject unsupported combos)
+- [ ] Named-model resolution (`large-v3-turbo` → `~/.aural/models/ggml-...bin`); warn on `.en` model + non-English language
+- [ ] `aural models list` / `aural models download <name>` (ggml from HF `ggerganov/whisper.cpp`)
+- [ ] Tests: capability validation, language/translate parsing, model resolution; gated multilingual e2e
+- [ ] Docs/README usage examples; tick PRD/PLAN
+
+### Phase 6.2 — `apple` engine (native Speech.framework, zero deps)
+
+- [ ] `AppleSpeechBackend` via `SFSpeechURLRecognitionRequest` (on-device); per-segment live + whole-file batch
+- [ ] Speech authorization + `NSSpeechRecognitionUsageDescription` in Info.plist; terminal-attributed TCC docs
+- [ ] Locale mapping (`de`→`de-DE`), `supportedLocales()` validation; reject `--translate`
+- [ ] Tests: locale mapping, capability errors; gated integration (Speech permission; likely local-only)
+
+### Phase 6.3 — `whisperkit` engine (SwiftPM dep)
+
+- [ ] Add `argmaxinc/argmax-oss-swift` (product `WhisperKit`); `WhisperKitBackend` loads model once (resident), transcribes segments
+- [ ] `DecodingOptions(task:language:)`; async→sync bridge; model auto-download; `aural models` lists WhisperKit cache
+- [ ] Arch gate: clear error on Intel; keep whisper/apple working
+- [ ] Tests: gated integration (tiny model download); revisit notarization/Homebrew + binary size (links to Phase 5)
+
+### Phase 6.4 — `parakeet` (deferred)
+
+- [ ] NVIDIA Parakeet via FluidAudio (CoreML); European-multilingual; no translate — schedule separately
+
 ## Future
 
 > Nice-to-have items outside current scope.
