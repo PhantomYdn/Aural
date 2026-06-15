@@ -21,30 +21,53 @@ struct CaptureEngine {
     let apps: [String]
     let excludeApps: [String]
     let mix: Bool
+    /// System/app capture backend: "auto", "sckit", or "coreaudio".
+    var captureBackend: String = "auto"
 
     /// Builds the capture session, output PCM format, and a human-readable
     /// source label for the requested source.
     func makeCapture() throws -> (CaptureSession, PCMFormat, String) {
-        if let (scope, label) = try makeTapScope() {
-            // Tap capture: stereo by default.
+        if captureSystem || !apps.isEmpty || !excludeApps.isEmpty {
+            // System/app capture: stereo by default.
             let channelCount = channels ?? 2
             let format = PCMFormat(
                 sampleRate: rate, bitsPerSample: bits, channels: channelCount)
 
             var micUID: String? = nil
-            var sourceLabel = label
+            var micSuffix = ""
             if mix {
                 let micDevice = try resolveInputDevice()
-                // The mic joins the tap's aggregate device, so mic TCC applies.
+                // The mic is mixed in, so mic TCC applies for either backend.
                 do {
                     try MicCaptureSession.ensureMicrophonePermission()
                 } catch let error as TapEngineError {
                     throw AuralError.noPermission(error.description)
                 }
                 micUID = micDevice.uid
-                sourceLabel += " + mic (\(micDevice.name))"
+                micSuffix = " + mic (\(micDevice.name))"
             }
-            Log.verbose("source: \(sourceLabel) -> \(rate) Hz, \(bits)-bit, \(channelCount) ch")
+
+            let backend = resolveCaptureBackend()
+            if backend == .screenCaptureKit {
+                guard #available(macOS 15.0, *) else {
+                    throw AuralError.unavailable(
+                        "the ScreenCaptureKit backend needs macOS 15+; use --capture-backend coreaudio.")
+                }
+                let label = screenCaptureLabel() + micSuffix
+                Log.verbose("source: \(label) [sckit] -> \(rate) Hz, \(bits)-bit, \(channelCount) ch")
+                let session = ScreenCaptureSession(
+                    captureSystem: captureSystem, apps: apps, excludeApps: excludeApps,
+                    micDeviceUID: micUID, mixMic: mix, outputFormat: format)
+                return (session, format, label)
+            }
+
+            // Core Audio process tap (headless-capable).
+            guard let (scope, label) = try makeTapScope() else {
+                throw AuralError.software("no capture scope")
+            }
+            let sourceLabel = label + micSuffix
+            Log.verbose(
+                "source: \(sourceLabel) [coreaudio] -> \(rate) Hz, \(bits)-bit, \(channelCount) ch")
             let session = SystemCaptureSession(
                 scope: scope, micDeviceUID: micUID, outputFormat: format)
             return (session, format, sourceLabel)
@@ -203,6 +226,34 @@ struct CaptureEngine {
                 throw AuralError.ioError("cannot open output file: \(error)")
             }
         }
+    }
+
+    enum CaptureBackendChoice { case screenCaptureKit, coreAudio }
+
+    /// Picks the system/app capture backend. `coreaudio`/`sckit` force one;
+    /// `auto` prefers ScreenCaptureKit when it can run (macOS 15+, a GUI session,
+    /// Screen Recording granted) and otherwise falls back to the headless-capable
+    /// Core Audio tap, with a one-line notice.
+    private func resolveCaptureBackend() -> CaptureBackendChoice {
+        switch captureBackend {
+        case "coreaudio": return .coreAudio
+        case "sckit": return .screenCaptureKit
+        default:
+            if #available(macOS 15.0, *), ScreenCaptureSession.isAvailable() {
+                return .screenCaptureKit
+            }
+            Log.verbose("ScreenCaptureKit unavailable (no GUI session / permission); using coreaudio")
+            return .coreAudio
+        }
+    }
+
+    /// Human-readable label for the ScreenCaptureKit source (from the raw flags).
+    private func screenCaptureLabel() -> String {
+        if !apps.isEmpty { return "app audio (" + apps.joined(separator: ", ") + ")" }
+        if !excludeApps.isEmpty {
+            return "system audio excluding " + excludeApps.joined(separator: ", ")
+        }
+        return "system audio (ScreenCaptureKit)"
     }
 
     /// Resolves --system/--app/--exclude-app into a tap scope, or nil for

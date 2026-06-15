@@ -83,6 +83,13 @@ struct Aural: ParsableCommand {
         """)
     var mix = false
 
+    @Option(name: .customLong("capture-backend"), help: ArgumentHelp(
+        "System/app capture backend: auto (default), sckit (ScreenCaptureKit, "
+            + "macOS 15+, Screen Recording), or coreaudio (process tap, headless). "
+            + "Or $AURAL_CAPTURE.",
+        valueName: "auto|sckit|coreaudio"))
+    var captureBackend: String?
+
     // MARK: Outputs
 
     @Option(name: [.short, .long], help: ArgumentHelp(
@@ -266,6 +273,11 @@ struct Aural: ParsableCommand {
             throw ValidationError(
                 "-d/--device selects a microphone; with system/app capture it only applies together with --mix.")
         }
+        let backend = resolvedCaptureBackend()
+        if !["auto", "sckit", "coreaudio"].contains(backend) {
+            throw ValidationError(
+                "--capture-backend must be auto, sckit, or coreaudio (got '\(backend)').")
+        }
 
         // Outputs.
         if noOutput && (audio != nil || transcript != nil) {
@@ -307,6 +319,19 @@ struct Aural: ParsableCommand {
         if let silenceThreshold, silenceThreshold >= 0 {
             throw ValidationError("--silence-threshold must be negative (dBFS).")
         }
+    }
+
+    /// Capture backend from --capture-backend, else $AURAL_CAPTURE, else "auto".
+    func resolvedCaptureBackend() -> String {
+        if let backend = captureBackend?.lowercased(), !backend.isEmpty {
+            return backend
+        }
+        if let env = ProcessInfo.processInfo.environment["AURAL_CAPTURE"]?.lowercased(),
+            !env.isEmpty
+        {
+            return env
+        }
+        return "auto"
     }
 
     // MARK: Run
@@ -407,7 +432,7 @@ struct Aural: ParsableCommand {
         let captureEngine = CaptureEngine(
             deviceUID: settings.micDevice, rate: rate ?? 44100, bits: bits ?? 16,
             channels: channels, captureSystem: captureSystem, apps: apps,
-            excludeApps: excludeApps, mix: mix)
+            excludeApps: excludeApps, mix: mix, captureBackend: resolvedCaptureBackend())
         let (session, format, sourceLabel) = try captureEngine.makeCapture()
 
         let metadata = WAVMetadata(
