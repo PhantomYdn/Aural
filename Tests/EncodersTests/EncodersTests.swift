@@ -134,11 +134,10 @@ struct AudioFileFormatTests {
     }
 
     @Test func writabilityMatrix() {
-        #expect(AudioFileFormat.wav.isWritable)
-        #expect(AudioFileFormat.m4a.isWritable)
-        #expect(AudioFileFormat.flac.isWritable)
-        #expect(AudioFileFormat.mp3.isWritable)  // vendored LAME
-        #expect(!AudioFileFormat.opus.isWritable)
+        // All formats writable: native WAV/M4A/FLAC, MP3 (LAME), Opus (native + Ogg).
+        for format in AudioFileFormat.allCases {
+            #expect(format.isWritable, "\(format.rawValue) should be writable")
+        }
     }
 }
 

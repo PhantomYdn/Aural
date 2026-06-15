@@ -55,6 +55,21 @@ final class MP3Sink: AudioSink, @unchecked Sendable {
     var bytesWritten: UInt64 { writer.bytesWritten }
 }
 
+/// Encodes the capture stream to Ogg/Opus via the native encoder + Ogg muxer.
+final class OpusSink: AudioSink, @unchecked Sendable {
+    private let writer: OpusFileWriter
+    let label: String
+
+    init(writer: OpusFileWriter, label: String) {
+        self.writer = writer
+        self.label = label
+    }
+
+    func write(_ data: Data) throws { try writer.write(data) }
+    func finalize() throws { try writer.finalize() }
+    var bytesWritten: UInt64 { writer.bytesWritten }
+}
+
 /// Headerless PCM to a file handle (default for piped stdout).
 final class RawStreamSink: AudioSink, @unchecked Sendable {
     private let handle: FileHandle

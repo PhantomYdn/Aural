@@ -8,14 +8,9 @@ public enum AudioFileFormat: String, CaseIterable, Sendable {
     case mp3
     case opus
 
-    /// Formats that can currently be written. Ogg/Opus (Ogg muxer) is planned —
-    /// see PLAN.md Phase 3.
-    public var isWritable: Bool {
-        switch self {
-        case .wav, .m4a, .flac, .mp3: return true
-        case .opus: return false
-        }
-    }
+    /// All known formats are writable: WAV/M4A/FLAC via CoreAudio, MP3 via
+    /// vendored LAME, Opus via the native encoder + Ogg muxer.
+    public var isWritable: Bool { true }
 
     /// Detects the format from a file path's extension.
     public static func detect(fromPath path: String) -> AudioFileFormat? {
