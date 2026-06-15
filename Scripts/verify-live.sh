@@ -97,6 +97,28 @@ else
   skip "Scripts/e2e-app-isolation.sh not found"
 fi
 
+# Captures system audio on a backend; a missing-permission/headless error for
+# the sckit backend is a SKIP (not a FAIL) so the script is usable without
+# Screen Recording granted.
+check_system_backend() { # backend extra-flags... label
+  local backend="$1"; shift
+  local label="${*: -1}"; set -- "${@:1:$(($#-1))}"
+  local out="$WORK/sys-$backend-$RANDOM.wav" err="$WORK/sys-$backend.err"
+  "$AURAL" --system --capture-backend "$backend" "$@" --duration 2 -a "$out" 2>"$err"
+  if grep -qiE "permission denied|no display|needs macOS 15" "$err"; then
+    skip "$label — $(tr '\n' ' ' <"$err" | sed 's/  */ /g' | cut -c1-80)"
+    return
+  fi
+  check_audio "$out" 1.5 "$label"
+}
+
+echo "[6] System-capture backends (records ~2 s of system audio each)"
+check_system_backend coreaudio "coreaudio --system"
+check_system_backend coreaudio --mix "coreaudio --system --mix (full-length even if silent)"
+check_system_backend sckit "sckit --system"
+check_system_backend sckit --mix "sckit --system --mix"
+check_system_backend auto "auto --system (picks a backend)"
+
 echo
 if [[ "$FAILED" -eq 0 ]]; then
   echo "ALL LIVE CHECKS PASSED"

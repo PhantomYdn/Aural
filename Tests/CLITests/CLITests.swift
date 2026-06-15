@@ -60,6 +60,7 @@ struct RootParsingTests {
         ["--split", "duration=2"],             // split needs an audio output
         ["-e", "bogus"],                        // unknown engine
         ["-e", "apple", "--translate"],         // apple cannot translate
+        ["--system", "--capture-backend", "bogus", "-a", "x.wav"],  // bad backend
     ])
     func rejectsInvalidCombinations(_ arguments: [String]) {
         #expect(throws: (any Error).self) {
@@ -79,6 +80,9 @@ struct RootParsingTests {
         ["--system", "--mix", "-d", "SomeUID"],
         ["--app", "com.example.app", "--app", "123"],
         ["--exclude-app", "com.example.app"],
+        ["--system", "--capture-backend", "coreaudio", "-a", "x.wav"],
+        ["--system", "--capture-backend", "sckit", "-a", "x.wav"],
+        ["--system", "--capture-backend", "auto", "-a", "x.wav"],
         ["--language", "de", "-i", "x.wav"],    // explicit language
         ["--translate", "-i", "x.wav"],         // whisper supports translate
         ["--no-translate", "-i", "x.wav"],      // explicit opt-out
@@ -93,6 +97,19 @@ struct RootParsingTests {
         let aural = try Aural.parse(
             ["--app", "com.a", "--app", "com.b", "--app", "42"])
         #expect(aural.apps == ["com.a", "com.b", "42"])
+    }
+
+    @Test func captureBackendFlagWins() throws {
+        let aural = try Aural.parse(["--system", "--capture-backend", "SCKit", "-a", "x.wav"])
+        #expect(aural.resolvedCaptureBackend() == "sckit")  // lowercased
+    }
+
+    @Test func captureBackendDefaultsToAutoWithoutEnv() throws {
+        let aural = try Aural.parse(["--system", "-a", "x.wav"])
+        // Only meaningful when AURAL_CAPTURE is unset in the test environment.
+        if ProcessInfo.processInfo.environment["AURAL_CAPTURE"] == nil {
+            #expect(aural.resolvedCaptureBackend() == "auto")
+        }
     }
 }
 

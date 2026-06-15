@@ -41,6 +41,29 @@ Capture all system audio except the listed application(s). Repeatable.
 Additionally mix the microphone into a system/app capture. Sources are
 clock\-synced with drift compensation.
 .TP
+.BI \-\-capture\-backend " auto|sckit|coreaudio"
+System/app capture backend (default
+.BR auto ).
+.B coreaudio
+uses a Core Audio process tap: needs the
+.B System Audio Recording
+permission and works headless (macOS 14.4+).
+.B sckit
+uses ScreenCaptureKit: needs the broader
+.B Screen Recording
+permission and a graphical login session (macOS 15+), and delivers audio
+continuously so
+.B \-\-mix
+keeps recording the mic while system audio is idle.
+.B auto
+prefers
+.B sckit
+when it can run (macOS 15+, Screen Recording granted, a display present) and
+otherwise falls back to
+.BR coreaudio .
+Also settable via
+.BR $AURAL_CAPTURE .
+.TP
 .BI \-i ", " \-\-input " PATH|\-"
 Read an existing audio file, or
 .B \-
@@ -208,6 +231,10 @@ Default silence threshold in dBFS (negative).
 .TP
 .B AURAL_DEVICE
 Default input device UID.
+.TP
+.B AURAL_CAPTURE
+Default system/app capture backend
+.RB ( auto / sckit / coreaudio ).
 .TP
 .B AURAL_WHISPER_BIN ", " AURAL_WHISPER_SERVER_BIN
 Override the whisper.cpp CLI / server binary path.

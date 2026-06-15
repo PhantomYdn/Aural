@@ -83,6 +83,7 @@ output transcribes to stdout.
 | `--app ID` | a specific app (bundle ID or PID; repeatable) |
 | `--exclude-app ID` | all system audio except the listed app(s) (repeatable) |
 | `--mix` | additionally mix the microphone into a system/app capture |
+| `--capture-backend auto\|sckit\|coreaudio` | system/app capture backend (default `auto`; or `$AURAL_CAPTURE`) |
 | `-i, --input PATH\|-` | read an existing file, or `-` for stdin (no live capture) |
 
 **Output — name what to keep; `-` means stdout** (at most one output may be `-`):
@@ -189,6 +190,19 @@ macOS gates microphone, system-audio, and speech recognition behind TCC. For an
 unsigned build these prompts are attributed to the **terminal** that launches
 `aural`. See [docs/permissions.md](docs/permissions.md) for the exact
 System Settings paths, the system-audio "+" flow, and notes for tmux/screen.
+
+System/app capture has two backends, selected by `--capture-backend` (default
+`auto`, or `$AURAL_CAPTURE`):
+
+- **`coreaudio`** — Core Audio process tap. Needs the narrower **System Audio
+  Recording** permission and works headless (cron/launchd/SSH), macOS 14.4+.
+- **`sckit`** — ScreenCaptureKit (`SCStream`, macOS 15+). Needs the broader
+  **Screen Recording** permission and a graphical login session (not headless).
+  It delivers audio continuously, so `--mix` keeps recording the mic while
+  system audio is idle.
+
+`auto` prefers `sckit` when it can run (macOS 15+, Screen Recording already
+granted, a display present) and otherwise falls back to `coreaudio`.
 
 ## Pipelines
 

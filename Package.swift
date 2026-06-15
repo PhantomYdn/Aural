@@ -60,6 +60,7 @@ let package = Package(
         ),
         .testTarget(name: "DeviceManagerTests", dependencies: ["DeviceManager"]),
         .testTarget(name: "EncodersTests", dependencies: ["Encoders"]),
+        .testTarget(name: "TapEngineTests", dependencies: ["TapEngine", "Encoders"]),
         .testTarget(name: "CLITests", dependencies: ["CLI"]),
     ]
 )

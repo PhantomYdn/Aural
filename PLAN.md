@@ -178,12 +178,12 @@
 > otherwise unchanged.
 
 - [x] PRD/docs: §6.2 two-backend model + `--capture-backend`; §7 Compatibility/Security (Screen Recording vs System Audio Recording, headless); docs/permissions.md both flows; min OS stays 14.4 (SCKit gated on 15+)
-- [ ] Step 1 — Core Audio tap fix (Option A): make the **microphone the aggregate's clock master** for `--mix` (was the tap), pin nominal rate to max(tap, mic); continuous mic capture regardless of system activity, headless-safe. This alone fixes the reported bug
-- [ ] Step 2 — `ScreenCaptureSession` (`@available(macOS 15)`): `SCStream` system/app audio via `SCContentFilter` (system/`--app`/`--exclude-app`), `.audio` → `CMSampleBuffer` → `PCMStreamConverter`; Screen Recording permission helper; reachable via `--capture-backend sckit`
-- [ ] Step 3 — SCKit integrated mic + `--mix`: `captureMicrophone`/`microphoneCaptureDeviceID` + `.microphone` output; app-level mixer summing synchronized system+mic
-- [ ] Step 4 — `--capture-backend auto|sckit|coreaudio` (+ `$AURAL_CAPTURE`); auto prefers SCKit when (macOS 15 ∧ GUI session ∧ Screen Recording) else notify + fall back to Core Audio; runtime SCKit failure also falls back
-- [ ] Step 5 — docs/tests: README/man (`--capture-backend`, both permissions, headless note); backend-selection + mixer unit tests; `Scripts/verify-live.sh` covers both; re-run the 60-min mic/system drift validation for both `--mix` paths
-- [ ] `aural apps` stays HAL-based (headless-friendly); the SCKit backend maps bundle id/PID → `SCRunningApplication` internally
+- [x] Step 1 — Core Audio tap fix (Option A): make the **microphone the aggregate's clock master** for `--mix` (was the tap), pin nominal rate to max(tap, mic); continuous mic capture regardless of system activity, headless-safe. This alone fixes the reported bug (commit `d42aba5`)
+- [x] Step 2 — `ScreenCaptureSession` (`@available(macOS 15)`): `SCStream` system/app audio via `SCContentFilter` (system/`--app`/`--exclude-app`), `.audio` → `CMSampleBuffer` → `PCMStreamConverter`; Screen Recording permission helper; reachable via `--capture-backend sckit` (commit `f9d5c37`)
+- [x] Step 3 — SCKit integrated mic + `--mix`: `captureMicrophone`/`microphoneCaptureDeviceID` + `.microphone` output; app-level mixer (`StreamMixing.sum`) summing synchronized system+mic (commit `f9d5c37`)
+- [x] Step 4 — `--capture-backend auto|sckit|coreaudio` (+ `$AURAL_CAPTURE`); auto prefers SCKit when (macOS 15 ∧ Screen Recording ∧ display present, via `ScreenCaptureSession.isAvailable()` — preflight, never prompts) else notify + fall back to Core Audio (commit `f9d5c37`). Note: selection is preflight-based; a runtime SCKit start failure after auto-selecting it surfaces an error rather than retrying Core Audio (rare grant-but-no-GUI case) — deferred
+- [~] Step 5 — docs/tests: [x] README/man (`--capture-backend`, both permissions, `$AURAL_CAPTURE`, headless note); [x] unit tests (`StreamMixingTests`, CLI backend resolution/validation); [x] `Scripts/verify-live.sh` step [6] covers both backends (sckit perm/headless → SKIP). Pending (needs Screen Recording grant + GUI): [ ] sckit end-to-end audio live test; [ ] re-run the 60-min mic/system drift validation for both `--mix` paths
+- [x] `aural apps` stays HAL-based (headless-friendly); the SCKit backend maps bundle id/PID → `SCRunningApplication` internally (`ScreenCaptureSession.match`)
 
 ## Future
 
