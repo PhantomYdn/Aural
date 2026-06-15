@@ -14,6 +14,9 @@ let package = Package(
         // Optional CoreML transcription engine (PRD §6.6 `whisperkit`); always
         // linked for now (PLAN Phase 6.3). Apple-Silicon-first.
         .package(url: "https://github.com/argmaxinc/argmax-oss-swift.git", from: "0.9.0"),
+        // CoreML Parakeet ASR engine (PRD §6.6 `parakeet`); always linked
+        // (PLAN Phase 6.4). Apple-Silicon-first.
+        .package(url: "https://github.com/FluidInference/FluidAudio.git", from: "0.12.4"),
     ],
     targets: [
         // Audio device & process enumeration (CoreAudio HAL).
@@ -28,6 +31,7 @@ let package = Package(
             dependencies: [
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
                 .product(name: "WhisperKit", package: "argmax-oss-swift"),
+                .product(name: "FluidAudio", package: "FluidAudio"),
                 "DeviceManager",
                 "TapEngine",
                 "Encoders",

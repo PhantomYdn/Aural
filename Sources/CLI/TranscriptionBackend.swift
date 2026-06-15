@@ -36,6 +36,10 @@ struct EngineSpec {
             capabilities: EngineCapabilities(autoDetect: true, translate: true, usesModelFile: true),
             isImplemented: true, plannedNote: nil),
         EngineSpec(
+            name: "parakeet",
+            capabilities: EngineCapabilities(autoDetect: true, translate: false, usesModelFile: false),
+            isImplemented: true, plannedNote: nil),
+        EngineSpec(
             name: "cloud",
             capabilities: EngineCapabilities(autoDetect: true, translate: true, usesModelFile: false),
             isImplemented: false,
@@ -120,6 +124,8 @@ enum TranscriptionEngine {
             _ = try AppleSpeechBackend.make(language: language)
         case "whisperkit":
             try Platform.requireAppleSilicon(engine: "whisperkit")
+        case "parakeet":
+            try Platform.requireAppleSilicon(engine: "parakeet")
         default:
             break
         }
@@ -141,6 +147,8 @@ enum TranscriptionEngine {
             return try AppleSpeechBackend.make(language: language)
         case "whisperkit":
             return try WhisperKitBackend.make(model: rawModel(modelFlag))
+        case "parakeet":
+            return try ParakeetBackend.make(model: rawModel(modelFlag), language: language)
         default:
             throw AuralError.software("engine '\(engineName)' has no batch backend.")
         }
@@ -176,6 +184,8 @@ enum TranscriptionEngine {
             return try AppleSpeechBackend.make(language: language)
         case "whisperkit":
             return try WhisperKitBackend.make(model: rawModel(modelFlag))
+        case "parakeet":
+            return try ParakeetBackend.make(model: rawModel(modelFlag), language: language)
         default:
             throw AuralError.software("engine '\(engineName)' has no live backend.")
         }

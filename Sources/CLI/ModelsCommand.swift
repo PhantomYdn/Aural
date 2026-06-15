@@ -53,6 +53,8 @@ struct ModelsList: ParsableCommand {
         let models = ModelRegistry.localModels()
             + ModelRegistry.coreMLModels(
                 engine: "whisperkit", directory: WhisperKitBackend.downloadBase)
+            + ModelRegistry.coreMLModels(
+                engine: "parakeet", directory: ParakeetBackend.downloadBase)
         if json {
             print(try OutputFormatting.json(models))
             return
