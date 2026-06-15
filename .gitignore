@@ -2,6 +2,9 @@
 .build/
 .swiftpm/
 
+# Local test binary copied to the repo root (e.g. for manual runs)
+/aural
+
 # Xcode
 *.xcodeproj/
 *.xcworkspace/
