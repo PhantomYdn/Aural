@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test:
+    name: Build & test (macOS)
+    # macOS 14 runner is Apple Silicon and matches the minimum OS (14.4),
+    # which the Core Audio process-tap API requires.
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode (Swift 6)
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: Versions
+        run: |
+          swift --version
+          xcodebuild -version
+
+      - name: Build
+        run: swift build -v
+
+      - name: Test
+        # Gated integration tests (whisper.cpp, models, Speech authorization)
+        # skip automatically when their prerequisites are absent, so the suite
+        # stays green on a stock runner.
+        run: swift test

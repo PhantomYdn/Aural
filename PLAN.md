@@ -6,6 +6,8 @@
 
 > Unscheduled items. Add new work here; `/plan` will triage on next run.
 
+- [ ] Leaf-subcommand `--help` prints the root help (e.g. `aural models list --help`, `aural config set --help`) — the root's floating options shadow it; `aural help <subcommand>` works. Investigate an ArgumentParser fix or document the workaround (README/man already steer to `aural help <subcommand>`).
+
 ## Phase 1: Project Foundation & Core Capture (PRD M1)
 
 - [x] Initialize git repository with `.gitignore` for Swift/SwiftPM
@@ -104,11 +106,11 @@
 
 ## Phase 5: Release Engineering & Public Beta (PRD M5)
 
-- [ ] Set up GitHub Actions CI: build, unit/integration tests on macOS 14.4+ runners
+- [x] Set up GitHub Actions CI: build + test on a macOS 14 (Apple-Silicon) runner with the Swift 6 toolchain (`.github/workflows/ci.yml`); gated integration tests skip without their tools so the suite stays green
 - [ ] Code signing and notarization so TCC permission flows work cleanly (PRD §7 Installability)
 - [ ] Create Homebrew formula; verify `brew install aural` end-to-end (US05)
-- [ ] Write man page following POSIX utility conventions
-- [ ] Write README: install, TCC permission setup, usage examples, exit codes
+- [x] Write man page following POSIX utility conventions (`man/aural.1`; renders clean under mandoc)
+- [x] Write README: install, TCC permission setup, usage examples, engines, config/env precedence, exit codes (`README.md`)
 - [ ] Provide example scripts: meeting recording, transcription pipeline, cron/launchd setup
 - [ ] Validate unattended operation from cron/launchd after TCC grant (US05)
 - [ ] Reliability test: 24-hour continuous recording produces valid file on SIGINT/SIGTERM (PRD §7)

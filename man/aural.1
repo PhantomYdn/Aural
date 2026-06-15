@@ -1,0 +1,293 @@
+.\" Manpage for aural.
+.TH AURAL 1 2026-06-15 "aural 0.1.0" "User Commands"
+.SH NAME
+aural \- capture audio and produce transcripts on macOS
+.SH SYNOPSIS
+.B aural
+.RI [ input ]
+.RI [ output ]
+.RI [ options ]
+.br
+.B aural
+.BR devices | apps | info | models | config
+.RI [ ... ]
+.SH DESCRIPTION
+.B aural
+is the verb \(em "listen and transcribe." It takes one input (live capture from
+the microphone by default, system or per\-application audio, or an existing
+file) and writes the outputs you name: an audio file, a transcript, or a stream
+on standard output. Naming no output transcribes to standard output.
+.PP
+Live capture uses Core Audio process taps (macOS 14.4+). Transcription uses a
+selectable engine; input is normalized to 16 kHz mono internally, so any
+readable audio format is accepted.
+.SH INPUT
+Choose at most one. The default is the system default microphone.
+.TP
+.BI \-d ", " \-\-device " UID"
+Live capture from a specific input device (see
+.BR "aural devices" ).
+.TP
+.B \-\-system
+Capture all system audio via a process tap.
+.TP
+.BI \-\-app " ID"
+Capture only this application's audio, by bundle ID or PID. Repeatable.
+.TP
+.BI \-\-exclude\-app " ID"
+Capture all system audio except the listed application(s). Repeatable.
+.TP
+.B \-\-mix
+Additionally mix the microphone into a system/app capture. Sources are
+clock\-synced with drift compensation.
+.TP
+.BI \-i ", " \-\-input " PATH|\-"
+Read an existing audio file, or
+.B \-
+for standard input, instead of live capture. Mutually exclusive with the live
+flags above.
+.SH OUTPUT
+Name what to keep;
+.B \-
+means standard output. At most one output may be
+.BR \- .
+.TP
+.BI \-a ", " \-\-audio " PATH|\-"
+Write audio to a file
+.RB ( .wav ", " .m4a ", " .flac )
+or
+.B \-
+for a WAV stream on stdout.
+.TP
+.BI \-t ", " \-\-transcript " PATH|\-"
+Write a transcript
+.RB ( .txt ", " .srt ", " .json )
+or
+.B \-
+for text on stdout.
+.TP
+.B \-\-raw
+With
+.BR "\-a \-" ,
+stream headerless raw PCM to stdout instead of a WAV container.
+.SH CAPTURE OPTIONS
+.TP
+.BI \-r ", " \-\-rate " HZ"
+Sample rate (live default 44100; transcode defaults to the source rate).
+.TP
+.BI \-b ", " \-\-bits " 16|24|32"
+Bit depth (live default 16; transcode defaults to the source depth).
+.TP
+.BI \-c ", " \-\-channels " 1|2"
+Channel count (defaults from the source, capped at 2).
+.TP
+.BI \-\-duration " SEC"
+Stop live capture after SEC seconds (otherwise Ctrl\-C).
+.TP
+.BI \-\-split " duration=SEC | silence=SEC"
+Split the audio file into sequentially numbered chunks. Requires
+.BR "\-a FILE" .
+.TP
+.BI \-\-silence\-threshold " dBFS"
+Peak level (negative) below which audio counts as silence for
+.BR "\-\-split silence" .
+Default \-50.
+.SH TRANSCRIPTION OPTIONS
+.TP
+.BI \-e ", " \-\-engine " ENGINE"
+Recognition engine:
+.B whisper
+(local whisper.cpp, default) or
+.B apple
+(native on\-device Speech.framework).
+.B whisperkit
+is planned and
+.B cloud
+is post\-MVP.
+.TP
+.BI \-\-model " NAME|PATH"
+For
+.BR whisper ,
+a ggml model path or short name resolved under
+.IR ~/.aural/models .
+.TP
+.BI \-\-language " CODE"
+Spoken language code (e.g.
+.BR de ),
+or
+.B auto
+to detect (default). The
+.B apple
+engine maps the code to a locale and cannot auto\-detect.
+.TP
+.BR \-\-translate ", " \-\-no\-translate
+Translate speech to English (whisper/whisperkit only).
+.B \-\-no\-translate
+overrides a configured default.
+.TP
+.BI \-\-format " wav|m4a|flac"
+Force the audio format, overriding the file extension.
+.TP
+.BI \-\-transcript\-format " txt|srt|json"
+Force the transcript format, overriding the file extension.
+.SH OTHER OPTIONS
+.TP
+.BR \-v ", " \-\-verbose
+Log diagnostic details to standard error.
+.TP
+.B \-\-version
+Print the version.
+.TP
+.BR \-h ", " \-\-help
+Show help.
+.SH SUBCOMMANDS
+.TP
+.B aural devices [\-\-list\-inputs|\-\-list\-outputs] [\-\-json]
+Enumerate audio input and output devices.
+.TP
+.B aural apps [\-\-json]
+List running applications whose audio can be captured.
+.TP
+.B aural info <file> [\-\-json]
+Print duration, sample rate, channels, and metadata of an audio file.
+.TP
+.B aural models list [\-\-available] [\-\-json]
+List installed models, or downloadable ones with
+.BR \-\-available .
+The active default is marked with
+.BR * .
+.TP
+.B aural models download <name> [\-\-default] [\-\-force]
+Download a whisper ggml model into
+.IR ~/.aural/models .
+The only command that makes a network request.
+.TP
+.B aural config show|set <key> <value>|unset <key>|path
+View and edit persisted defaults. Keys:
+.BR model ", " engine ", " language ", " translate ", " silence\-threshold ", " device .
+.PP
+Use
+.B aural help <subcommand>
+for a subcommand's full options.
+.SH ENVIRONMENT
+Most defaults resolve flag, then environment, then config, then a built\-in
+default.
+.TP
+.B AURAL_WHISPER_MODEL
+Default ggml model (path or short name).
+.TP
+.B AURAL_ENGINE
+Default engine.
+.TP
+.B AURAL_LANGUAGE
+Default spoken language, or
+.BR auto .
+.TP
+.B AURAL_TRANSLATE
+Default translate behavior
+.RB ( true / false ).
+.TP
+.B AURAL_SILENCE_THRESHOLD
+Default silence threshold in dBFS (negative).
+.TP
+.B AURAL_DEVICE
+Default input device UID.
+.TP
+.B AURAL_WHISPER_BIN ", " AURAL_WHISPER_SERVER_BIN
+Override the whisper.cpp CLI / server binary path.
+.TP
+.B AURAL_WHISPER_SERVER
+Set to
+.B 0
+to disable the resident whisper\-server backend.
+.SH FILES
+.TP
+.I ~/.aural/config.json
+Persisted defaults (JSON).
+.TP
+.I ~/.aural/models/ggml\-*.bin
+Downloaded whisper ggml models.
+.SH EXIT STATUS
+.TP
+.B 0
+Success.
+.TP
+.B 1
+Generic failure.
+.TP
+.B 64
+Usage / invalid arguments.
+.TP
+.B 66
+Input file or device not found.
+.TP
+.B 69
+Feature or engine unavailable / not implemented.
+.TP
+.B 70
+Internal error.
+.TP
+.B 74
+I/O error.
+.TP
+.B 77
+Permission denied (microphone, system audio, or speech recognition).
+.PP
+A non\-zero transcription engine exit code propagates through the pipeline.
+.SH EXAMPLES
+Live microphone to a transcript on stdout:
+.PP
+.RS
+.nf
+aural
+.fi
+.RE
+.PP
+Capture a meeting (system + mic), keeping audio and subtitles:
+.PP
+.RS
+.nf
+aural \-\-system \-\-mix \-a meeting.m4a \-t meeting.srt
+.fi
+.RE
+.PP
+Transcribe a file, detecting the language:
+.PP
+.RS
+.nf
+aural \-i talk.mp3 \-\-language auto \-t talk.srt
+.fi
+.RE
+.PP
+Transcode between formats:
+.PP
+.RS
+.nf
+aural \-i in.wav \-a out.flac
+.fi
+.RE
+.PP
+Stream live WAV into another tool:
+.PP
+.RS
+.nf
+aural \-a \- \-\-duration 10 | ffmpeg \-i \- out.mp3
+.fi
+.RE
+.SH PERMISSIONS
+Microphone, system\-audio, and speech recognition are gated by macOS TCC. For
+an unsigned build, prompts are attributed to the terminal that runs
+.BR aural .
+See
+.I docs/permissions.md
+in the project for setup details.
+.SH SEE ALSO
+.BR whisper\-cli (1),
+.BR ffmpeg (1),
+.BR sox (1)
+.SH BUGS
+With nested subcommands, prefer
+.B aural help <subcommand>
+over
+.BR "aural <subcommand> \-\-help" .
+Report issues via the project repository.
