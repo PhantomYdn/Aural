@@ -73,16 +73,21 @@ public final class SystemCaptureSession: CaptureSession, @unchecked Sendable {
             ],
         ]
         if let micDeviceUID {
-            // The mic joins as a drift-compensated sub-device. The tap is
-            // the preferred timebase so system audio keeps its native rate
-            // (a 16 kHz Bluetooth mic must not downclock the whole capture).
+            // The mic joins as a drift-compensated sub-device and is the
+            // aggregate's *clock master*. A process tap only clocks while the
+            // system output is actually playing, so if the tap were the master
+            // the IOProc (and the mic) would stall whenever nothing plays —
+            // mixing then captured silence until some app made a sound. The
+            // mic is a real input device that clocks continuously; the tap is
+            // drift-compensated to it, and the nominal rate is pinned below so a
+            // low-rate mic doesn't downclock the system-audio capture.
             composition[kAudioAggregateDeviceSubDeviceListKey] = [
                 [
                     kAudioSubDeviceUIDKey: micDeviceUID,
                     kAudioSubDeviceDriftCompensationKey: true,
                 ]
             ]
-            composition[kAudioAggregateDeviceMainSubDeviceKey] = tap.uid
+            composition[kAudioAggregateDeviceMainSubDeviceKey] = micDeviceUID
         }
 
         var newAggregateID = AudioObjectID(kAudioObjectUnknown)
@@ -94,12 +99,15 @@ public final class SystemCaptureSession: CaptureSession, @unchecked Sendable {
         }
         aggregateID = newAggregateID
 
-        // 3. Pin the aggregate clock to the tap's native rate. When a
-        // sub-device (e.g., a 16 kHz Bluetooth mic) joins, the HAL may
-        // otherwise clock the whole aggregate at the mic's rate, degrading
-        // the system-audio capture. Failure is tolerated; the actual rate
-        // is read back below either way.
-        Self.setNominalSampleRate(of: newAggregateID, to: tapASBD.mSampleRate)
+        // 3. Pin the aggregate clock to at least the tap's native rate. With
+        // the mic as the clock master (for --mix) the aggregate defaults to the
+        // mic's rate, so a low-rate mic (e.g. 16 kHz Bluetooth) would otherwise
+        // downclock the system-audio capture; take the higher of the mic's
+        // default and the tap rate. (System-only capture has no mic and clocks
+        // at the tap rate already.) Failure is tolerated; the actual rate is
+        // read back below either way.
+        let defaultRate = Self.nominalSampleRate(of: newAggregateID) ?? tapASBD.mSampleRate
+        Self.setNominalSampleRate(of: newAggregateID, to: max(defaultRate, tapASBD.mSampleRate))
         let actualRate = Self.nominalSampleRate(of: newAggregateID) ?? tapASBD.mSampleRate
 
         // Converter input = tap stream's channel layout at the aggregate's
