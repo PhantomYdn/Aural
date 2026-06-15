@@ -63,7 +63,17 @@ struct ConfigSet: ParsableCommand {
 
     @OptionGroup var options: GlobalOptions
 
+    /// True if the captured arguments are a help request. Needed because
+    /// `.captureForPassthrough` (used so values like `-40` aren't parsed as
+    /// options) also swallows `-h`/`--help` before ArgumentParser sees them.
+    static func isHelpRequest(_ arguments: [String]) -> Bool {
+        arguments.contains("-h") || arguments.contains("--help")
+    }
+
     func run() throws {
+        if Self.isHelpRequest(arguments) {
+            throw CleanExit.helpRequest(self)
+        }
         try runMapped(verbose: options.verbose) {
             guard arguments.count == 2 else {
                 throw AuralError.usage(

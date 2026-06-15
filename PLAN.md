@@ -6,7 +6,7 @@
 
 > Unscheduled items. Add new work here; `/plan` will triage on next run.
 
-- [ ] Leaf-subcommand `--help` prints the root help (e.g. `aural models list --help`, `aural config set --help`) — the root's floating options shadow it; `aural help <subcommand>` works. Investigate an ArgumentParser fix or document the workaround (README/man already steer to `aural help <subcommand>`).
+- [x] Leaf-subcommand `--help`: the broad symptom was a zsh test artifact (an unquoted `$var` holding `"models list"` is passed as one argument, so aural shows root help) — `aural models list --help` etc. work directly (also helped by the argument-parser 1.8.2 bump). The one real case, `aural config set --help`, was swallowed by `.captureForPassthrough` (used for `-40` values); fixed via `ConfigSet.isHelpRequest` → `CleanExit.helpRequest`. Stale man BUGS note removed.
 
 ## Phase 1: Project Foundation & Core Capture (PRD M1)
 
@@ -51,7 +51,9 @@
 
 ### Pending live verification (capture permissions were reset mid-session; needs GUI access)
 
-> Commands updated to the unified root-verb syntax (see Phase 4.5).
+> Commands updated to the unified root-verb syntax (see Phase 4.5). Automated by
+> `Scripts/verify-live.sh` — grant Microphone + System Audio Recording to the
+> terminal, then run it; it PASS/FAILs each item below.
 
 - [ ] Re-grant TCC: Microphone for the terminal (System Settings → Privacy & Security → Microphone) and System Audio Recording (Screen & System Audio Recording → "+" → terminal, restart terminal)
 - [ ] `aural --duration 2 -a x.m4a` and `x.flac` — live encoded capture (afinfo check)

@@ -130,6 +130,16 @@ struct ConfigurationTests {
         #expect(wk?.contains("aural config set engine whisperkit") == true)
     }
 
+    @Test func configSetRecognizesHelpRequest() {
+        #expect(ConfigSet.isHelpRequest(["--help"]))
+        #expect(ConfigSet.isHelpRequest(["-h"]))
+        #expect(ConfigSet.isHelpRequest(["model", "--help"]))
+        // Real set commands (incl. negative values) are not help requests.
+        #expect(!ConfigSet.isHelpRequest(["model", "base.en"]))
+        #expect(!ConfigSet.isHelpRequest(["silence-threshold", "-40"]))
+        #expect(!ConfigSet.isHelpRequest([]))
+    }
+
     @Test func modelNoteWhisperNotPresentOnlyForWhisperEngine() {
         // Unknown value, whisper engine -> "not present" download hint.
         let whisper = ConfigSet.modelNote(value: "nope", configuredEngine: nil, installedEngine: nil)
