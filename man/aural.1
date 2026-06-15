@@ -154,15 +154,18 @@ List running applications whose audio can be captured.
 Print duration, sample rate, channels, and metadata of an audio file.
 .TP
 .B aural models list [\-\-available] [\-\-json]
-List installed models, or downloadable ones with
+List installed models across engines, or the downloadable catalog with
 .BR \-\-available .
 The active default is marked with
 .BR * .
 .TP
 .B aural models download <name> [\-\-default] [\-\-force]
-Download a whisper ggml model into
-.IR ~/.aural/models .
-The only command that makes a network request.
+Download a model. Names are engine\-tagged: a bare ggml name is a whisper model
+.RB ( base.en );
+CoreML engines use a prefix
+.RB ( whisperkit:tiny ", " parakeet:v3 ).
+.B \-\-default
+makes it the default (also setting the engine for whisperkit/parakeet).
 .TP
 .B aural config show|set <key> <value>|unset <key>|path
 View and edit persisted defaults. Keys:

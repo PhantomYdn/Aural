@@ -141,16 +141,23 @@ input; it is normalized to 16 kHz mono internally.
 
 ## Models
 
-Whisper ggml models live in `~/.aural/models` as `ggml-<name>.bin`.
+Whisper ggml models live in `~/.aural/models` as `ggml-<name>.bin`; whisperkit
+and parakeet CoreML models are cached by their SDKs (and shown by `models list`).
 
 ```sh
-aural models list --available        # catalog you can download
-aural models download large-v3-turbo # fetch one (the only command that hits the network)
-aural models list                    # what's installed; the active default is marked *
+aural models list                    # installed models, all engines; default marked *
+aural models list --available        # downloadable catalog, with an ENGINE column
+
+# Download names are engine-tagged: bare = whisper ggml, prefix = CoreML engine
+aural models download large-v3-turbo            # whisper ggml
+aural models download whisperkit:large-v3-v20240930_626MB
+aural models download parakeet:v3               # or parakeet:v2 (English-only)
 ```
 
-The first model you download becomes the default; set it explicitly with
-`--default` or `aural config set model <name>`.
+The first whisper model you download becomes the default. `--default` makes any
+model the default; for whisperkit/parakeet it also sets the engine (e.g.
+`aural models download parakeet:v3 --default` ⇒ `engine=parakeet`). CoreML
+engines also auto-download on first use, so an explicit download is optional.
 
 ## Configuration & environment
 

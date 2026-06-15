@@ -7,11 +7,12 @@ struct Models: ParsableCommand {
         commandName: "models",
         abstract: "List and download local transcription models.",
         discussion: """
-            Models live in ~/.aural/models as ggml-<name>.bin files and are \
-            selected with --model. 'download' fetches whisper ggml models from \
-            Hugging Face (ggerganov/whisper.cpp) — the only command here that \
-            makes a network request. The 'apple' engine uses OS-managed assets \
-            and is not listed.
+            'list' shows installed models across engines; 'list --available' \
+            shows what you can download. 'download <name>' fetches a model: a \
+            bare ggml name for whisper (base.en), or an engine-tagged name for \
+            CoreML engines (whisperkit:tiny, parakeet:v3). Downloads are the only \
+            commands here that make network requests. The 'apple' engine uses \
+            OS-managed assets and is not listed.
             """,
         subcommands: [ModelsList.self, ModelsDownload.self],
         defaultSubcommand: ModelsList.self
@@ -21,9 +22,10 @@ struct Models: ParsableCommand {
 /// One downloadable catalog entry (also the `--available --json` shape).
 struct AvailableModel: Codable {
     let name: String
-    let multilingual: Bool
+    let engine: String
+    let languages: String
     let installed: Bool
-    /// True if this is the active model (`$AURAL_WHISPER_MODEL` selects it).
+    /// True if this download is the active default (engine + model in config).
     let current: Bool
 }
 
@@ -76,28 +78,44 @@ struct ModelsList: ParsableCommand {
     }
 
     private func listAvailable() throws {
-        let local = ModelRegistry.localModels()
-        let installed = Set(local.map(\.name))
-        let currentName = ModelRegistry.currentModelPath().flatMap(ModelRegistry.shortName(forPath:))
-        let entries = ModelRegistry.downloadable.map {
+        let whisperNames = Set(ModelRegistry.localModels().map(\.name))
+        let wkCache = ModelRegistry.coreMLModels(
+            engine: "whisperkit", directory: WhisperKitBackend.downloadBase)
+        let pkCache = ModelRegistry.coreMLModels(
+            engine: "parakeet", directory: ParakeetBackend.downloadBase)
+        let currentWhisper = ModelRegistry.currentModelPath()
+            .flatMap(ModelRegistry.shortName(forPath:))
+        let config = Configuration.load()
+
+        func installed(_ m: DownloadableModel) -> Bool {
+            switch m.engine {
+            case "whisperkit": return wkCache.contains { $0.name.contains(m.modelId) }
+            case "parakeet": return pkCache.contains { $0.name.contains(m.modelId) }
+            default: return whisperNames.contains(m.modelId)
+            }
+        }
+        func current(_ m: DownloadableModel) -> Bool {
+            if m.engine == "whisper" { return currentWhisper == m.modelId }
+            return config.engine == m.engine && config.model == m.modelId
+        }
+
+        let entries = ModelCatalog.available().map {
             AvailableModel(
-                name: $0,
-                multilingual: !ModelRegistry.isEnglishOnly(modelPath: "ggml-\($0).bin"),
-                installed: installed.contains($0),
-                current: $0 == currentName)
+                name: $0.name, engine: $0.engine,
+                languages: $0.isEnglishOnly ? "english-only" : "multilingual",
+                installed: installed($0), current: current($0))
         }
         if json {
             print(try OutputFormatting.json(entries))
             return
         }
         let rows = entries.map {
-            [$0.name, $0.multilingual ? "multilingual" : "english-only",
-             $0.installed ? "yes" : "", $0.current ? "*" : ""]
+            [$0.name, $0.engine, $0.languages, $0.installed ? "yes" : "", $0.current ? "*" : ""]
         }
         print(OutputFormatting.table(
-            header: ["NAME", "LANGUAGES", "INSTALLED", "CURRENT"], rows: rows))
-        print("\ndownload with: aural models download <name>  (any ggml name from")
-        print("ggerganov/whisper.cpp also works, e.g. small.en-q5_1)")
+            header: ["NAME", "ENGINE", "LANGUAGES", "INSTALLED", "CURRENT"], rows: rows))
+        print("\ndownload with: aural models download <name>")
+        print("(whisper: any ggml name from ggerganov/whisper.cpp also works)")
     }
 
     /// Notes the active model when it lives outside ~/.aural/models (so no listed
@@ -119,15 +137,18 @@ struct ModelsDownload: ParsableCommand {
         abstract: "Download a whisper ggml model into ~/.aural/models.")
 
     @Argument(help: ArgumentHelp(
-        "Model short name, e.g. base.en, small, large-v3-turbo.", valueName: "name"))
+        "Model name. whisper: a ggml short name (base.en). CoreML: engine-tagged "
+            + "(whisperkit:tiny, parakeet:v3). See 'aural models list --available'.",
+        valueName: "name"))
     var name: String
 
     @Flag(name: .customLong("force"), help: "Re-download even if the model already exists.")
     var force = false
 
     @Flag(name: .customLong("default"), help: """
-        Set this model as the default in ~/.aural/config.json. The first model \
-        you download becomes the default automatically.
+        Make this the default (~/.aural/config.json). For whisper the first \
+        download is auto-adopted; for whisperkit/parakeet --default also sets \
+        the engine.
         """)
     var makeDefault = false
 
@@ -135,29 +156,44 @@ struct ModelsDownload: ParsableCommand {
 
     func run() throws {
         try runMapped(verbose: options.verbose) {
-            try ModelDownloader.download(name: name, force: force)
+            let spec = ModelCatalog.parse(name)
+            try ModelDownloader.download(spec: spec, force: force)
 
-            // Auto-adopt the first model as the default; --default always sets it.
             var config = Configuration.load()
-            if ModelDownloader.shouldSetDefault(explicit: makeDefault, existing: config.model) {
-                config.model = name
+            let adopt =
+                spec.engine == "whisper"
+                ? ModelDownloader.shouldSetDefault(explicit: makeDefault, existing: config.model)
+                : makeDefault
+            if adopt {
+                config.model = spec.modelId
+                if spec.engine != "whisper" { config.engine = spec.engine }
                 try config.save()
-                Log.notice("set '\(name)' as the default model (aural config)")
+                Log.notice("set '\(spec.name)' as the default (aural config)")
             }
         }
     }
 }
 
-/// Downloads a whisper ggml model to `~/.aural/models`. This is the only
-/// network-touching code path in Aural and is always explicitly invoked.
+/// Downloads transcription models. The whisper ggml path is the only direct
+/// network code in Aural; whisperkit/parakeet downloads are delegated to their
+/// SDKs. Always explicitly invoked.
 enum ModelDownloader {
-    /// Whether a freshly downloaded model should become the default: when the
-    /// user asked (`--default`) or no default is configured yet (first model).
+    /// Whether a freshly downloaded whisper model should become the default:
+    /// when the user asked (`--default`) or no default is configured yet.
     static func shouldSetDefault(explicit: Bool, existing: String?) -> Bool {
         explicit || (existing?.isEmpty ?? true)
     }
 
-    static func download(name: String, force: Bool) throws {
+    /// Dispatches a download to the right engine.
+    static func download(spec: DownloadableModel, force: Bool) throws {
+        switch spec.engine {
+        case "whisperkit": try WhisperKitBackend.download(variant: spec.modelId)
+        case "parakeet": try ParakeetBackend.download(version: spec.modelId)
+        default: try downloadGGML(name: spec.modelId, force: force)
+        }
+    }
+
+    static func downloadGGML(name: String, force: Bool) throws {
         let directory = ModelRegistry.modelsDirectory
         try FileManager.default.createDirectory(
             at: directory, withIntermediateDirectories: true)

@@ -147,6 +147,7 @@
 - [x] European-multilingual (v3, 25 languages) + English-only (v2 via `--model v2`); autoDetect, no `--language` selection (warned/ignored), `--translate` rejected (capability)
 - [x] srt/json built from `ASRResult.tokenTimings` (grouped into cues); arch gate (Apple-Silicon-only); FluidAudio manages its own cache (`~/Library/Application Support/FluidAudio/Models` — it ignores a custom dir when models already exist), which `aural models list` reads and shows
 - [x] Tests: version mapping + language notice + token-timing→cues (pure); EngineSpec; env-gated integration (`AURAL_TEST_PARAKEET=1`). `make test` green — 171 tests, 41 suites. Verified live: `aural -i clip --engine parakeet` transcribes on-device, srt cues, --translate rejected, models list shows the cache
+- [x] Engine-tagged model management for the CoreML engines: `ModelCatalog` parses `whisperkit:<variant>` / `parakeet:v2|v3` (bare = whisper ggml); `aural models list --available` gains an ENGINE column covering all engines; `aural models download <name>` dispatches per engine (whisper ggml / `WhisperKit.download` / `AsrModels.download`), with `--default` also setting `config.engine` for whisperkit/parakeet. Verified live: `download whisperkit:base`, `download parakeet:v3 --default`. 177 tests, 42 suites
 
 ## Phase 5: Release Engineering & Public Beta (PRD M5)
 

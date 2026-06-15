@@ -193,10 +193,10 @@ aural --system --engine whisperkit --translate -t -  # any language -> English, 
 - `--json` : output in JSON for scripting.
 
 **`aural models`**
-- `list` : show locally available models, sizes, and the active default (marked); the entry matching the resolved default model carries a `*`.
-- `list --available` : show the downloadable catalog (from `ggerganov/whisper.cpp`) with language coverage and installed/current status.
-- `download <name>` : fetch a model into `~/.aural/models` (whisper ggml) or trigger the engine's own cache (whisperkit). `--default` sets it as the config default; the first model downloaded becomes the default automatically. `--force` re-downloads.
-- Applies to file-based engines (`whisper`, `whisperkit`); `apple` uses OS-managed assets.
+- `list` : show installed models across engines (name, engine, size) and the active default (`*`).
+- `list --available` : show the downloadable catalog across engines with an `ENGINE` column, language coverage, and installed/current status.
+- `download <name>` : fetch a model. Names are engine-tagged: a bare ggml short name is a whisper model (`base.en`); CoreML engines use a prefix (`whisperkit:tiny`, `parakeet:v3`). whisper models land in `~/.aural/models`; whisperkit/parakeet delegate to their SDK caches. `--force` re-downloads. `--default` makes it the default: for whisper the first download is auto-adopted; for whisperkit/parakeet `--default` also sets `config.engine`.
+- Applies to file-based engines (`whisper`, `whisperkit`, `parakeet`); `apple` uses OS-managed assets.
 - `--json` on `list` for scripting.
 
 **`aural config`** — persisted defaults in `~/.aural/config.json` (JSON; user-editable, kebab-case keys).

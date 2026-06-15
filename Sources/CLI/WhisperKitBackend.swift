@@ -25,6 +25,23 @@ final class WhisperKitBackend: TranscriptionBackend {
         ModelRegistry.modelsDirectory.appendingPathComponent("whisperkit", isDirectory: true)
     }
 
+    /// Variants offered by `aural models list --available` / `download`. Any
+    /// valid WhisperKit variant also works with `download whisperkit:<variant>`.
+    static let downloadableVariants = [
+        "tiny", "base", "small",
+        "large-v3-v20240930_626MB", "large-v3-v20240930_turbo",
+    ]
+
+    /// Pre-downloads a variant's CoreML bundles (no load) into the cache.
+    static func download(variant: String) throws {
+        try Platform.requireAppleSilicon(engine: "whisperkit")
+        let base = downloadBase
+        Log.notice("downloading whisperkit model \(variant) …")
+        try RunLoopBridge.runBlocking(timeout: 3600) {
+            _ = try await WhisperKit.download(variant: variant, downloadBase: base)
+        }
+    }
+
     /// Loads (and, on first use, downloads) the model. `model` is a WhisperKit
     /// variant name (e.g. `large-v3-v20240930_626MB`); nil loads the SDK default.
     static func make(model: String?) throws -> WhisperKitBackend {

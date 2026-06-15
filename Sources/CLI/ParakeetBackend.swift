@@ -71,11 +71,24 @@ final class ParakeetBackend: TranscriptionBackend {
 
     func shutdown() {}
 
+    /// Versions offered by `aural models list --available` / `download`.
+    static let downloadableVersions = ["v3", "v2"]
+
     /// Selects the model version: `v2`/`en` → English-only; default → v3.
     static func modelVersion(_ model: String?) -> AsrModelVersion {
         switch model?.lowercased() {
         case "v2", "parakeet-v2", "en", "english": return .v2
         default: return .v3
+        }
+    }
+
+    /// Pre-downloads the model bundles (no load) into FluidAudio's cache.
+    static func download(version model: String?) throws {
+        try Platform.requireAppleSilicon(engine: "parakeet")
+        let version = modelVersion(model)
+        Log.notice("downloading parakeet \(version == .v2 ? "v2" : "v3") models …")
+        try RunLoopBridge.runBlocking(timeout: 3600) {
+            _ = try await AsrModels.download(version: version)
         }
     }
 
