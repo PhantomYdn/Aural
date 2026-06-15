@@ -34,8 +34,9 @@ struct Aural: ParsableCommand {
               aural -i in.wav -a out.m4a              convert between formats
               aural -a - | ffmpeg -i - ...            stream WAV into a pipe
 
-            Transcription requires a local whisper.cpp (brew install \
-            whisper-cpp) and a ggml model (--model or $AURAL_WHISPER_MODEL).
+            The default 'whisper' engine needs a local whisper.cpp + ggml \
+            model; apple/whisperkit/parakeet are alternatives (see --engine, \
+            'aural models').
             """,
         version: "0.1.0",
         subcommands: [
@@ -122,8 +123,8 @@ struct Aural: ParsableCommand {
     var split: String?
 
     @Option(name: .customLong("silence-threshold"), help: ArgumentHelp(
-        "Peak level (dBFS, negative) below which audio counts as silence for --split silence "
-            + "(default -50; or $AURAL_SILENCE_THRESHOLD / aural config).",
+        "Peak dBFS (negative) below which audio is silence — for --split silence and "
+            + "live-transcription segmentation (default -50; or $AURAL_SILENCE_THRESHOLD / config).",
         valueName: "dbfs"))
     var silenceThreshold: Double?
 
@@ -149,15 +150,14 @@ struct Aural: ParsableCommand {
     var engine: String?
 
     @Option(help: ArgumentHelp(
-        "ggml Whisper model: a path or a short name resolved under ~/.aural/models "
-            + "(e.g. base.en, large-v3-turbo). Default: $AURAL_WHISPER_MODEL, then "
-            + "the config 'model' (aural config).",
+        "Model for the chosen engine; form varies. Default: $AURAL_WHISPER_MODEL "
+            + "or config. See 'aural models list --available'.",
         valueName: "name|path"))
     var model: String?
 
     @Option(help: ArgumentHelp(
-        "Spoken language code (e.g. en, de), or 'auto' to detect "
-            + "(default auto; or $AURAL_LANGUAGE / aural config).",
+        "Spoken language code or 'auto' (default). Varies by engine — apple uses a "
+            + "locale, parakeet always auto-detects. Or $AURAL_LANGUAGE / config.",
         valueName: "code"))
     var language: String?
 

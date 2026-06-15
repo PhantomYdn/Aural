@@ -98,7 +98,8 @@ output transcribes to stdout.
 (1/2), `--duration SEC`, `--split duration=SEC` / `--split silence=SEC`
 (with `--silence-threshold dBFS`).
 
-**Transcription**: `-e/--engine`, `--model`, `--language` (`auto` to detect),
+**Transcription**: `-e/--engine`, `--model` (engine-specific — see
+[Models](#models)), `--language` (`auto`, or a code; support varies by engine),
 `--translate` / `--no-translate`, `--transcript-format txt|srt|json`.
 
 Run `aural --help` for the full list, and `aural help <subcommand>` for a

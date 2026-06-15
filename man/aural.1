@@ -108,19 +108,30 @@ or
 is post\-MVP.
 .TP
 .BI \-\-model " NAME|PATH"
-For
-.BR whisper ,
-a ggml model path or short name resolved under
-.IR ~/.aural/models .
+Model for the chosen engine; the form varies:
+.B whisper
+a ggml path or short name
+.RB ( base.en );
+.B whisperkit
+a variant
+.RB ( large\-v3\-v20240930_626MB );
+.B parakeet
+a version
+.RB ( v2 / v3 );
+.B apple
+ignores it. See
+.BR "aural models list \-\-available" .
 .TP
 .BI \-\-language " CODE"
 Spoken language code (e.g.
 .BR de ),
 or
 .B auto
-to detect (default). The
+to detect (default). Support varies by engine: the
 .B apple
-engine maps the code to a locale and cannot auto\-detect.
+engine maps the code to a locale (auto = current locale) and
+.B parakeet
+always auto\-detects.
 .TP
 .BR \-\-translate ", " \-\-no\-translate
 Translate speech to English (whisper/whisperkit only).
