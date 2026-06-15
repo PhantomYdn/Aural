@@ -18,7 +18,7 @@ stdout). It is built for Unix-style pipelines and unattended use.
   multilingual + translate) or `apple` (native on-device Speech.framework, no
   dependencies). Near-runtime live transcription segments the stream and emits
   text as you speak.
-- **Formats**: write `.wav`, `.m4a`, `.flac` audio and `.txt`, `.srt`, `.json`
+- **Formats**: write `.wav`, `.m4a`, `.flac`, `.mp3`, `.opus` audio and `.txt`, `.srt`, `.json`
   transcripts; **transcode** between formats (`aural -i in -a out`); **split**
   into chunks by duration or silence.
 - **Streaming**: `-a -` writes a WAV (or raw PCM) stream to stdout; transcripts
@@ -89,7 +89,7 @@ output transcribes to stdout.
 
 | Flag | Output |
 |------|--------|
-| `-a, --audio PATH\|-` | audio file (`.wav`/`.m4a`/`.flac`), or `-` for a WAV stream |
+| `-a, --audio PATH\|-` | audio file (`.wav`/`.m4a`/`.flac`/`.mp3`/`.opus`), or `-` for a WAV stream |
 | `-t, --transcript PATH\|-` | transcript (`.txt`/`.srt`/`.json`), or `-` for text |
 | *(none)* | transcribe to stdout (the default verb) |
 | `--raw` | with `-a -`, stream headerless PCM instead of WAV |

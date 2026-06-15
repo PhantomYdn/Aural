@@ -54,7 +54,7 @@ means standard output. At most one output may be
 .TP
 .BI \-a ", " \-\-audio " PATH|\-"
 Write audio to a file
-.RB ( .wav ", " .m4a ", " .flac )
+.RB ( .wav ", " .m4a ", " .flac ", " .mp3 ", " .opus )
 or
 .B \-
 for a WAV stream on stdout.
@@ -138,7 +138,7 @@ Translate speech to English (whisper/whisperkit only).
 .B \-\-no\-translate
 overrides a configured default.
 .TP
-.BI \-\-format " wav|m4a|flac"
+.BI \-\-format " wav|m4a|flac|mp3|opus"
 Force the audio format, overriding the file extension.
 .TP
 .BI \-\-transcript\-format " txt|srt|json"

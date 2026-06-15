@@ -48,7 +48,7 @@ The tool strictly follows Unix/Linux design patterns, treating audio as a stream
 | 4 | File output — native formats | P0 | Save to WAV (PCM), M4A/AAC, or FLAC using native CoreAudio encoders. |
 | 5 | Stream-mode operation | P0 | Stream a WAV container to stdout with `-a -` (e.g., `aural -a - \| ffmpeg ...`), or headerless PCM with `--raw`; accept audio from stdin (`-i -`) for transcoding/transcription. |
 | 6 | Signal handling & graceful shutdown | P0 | On SIGINT (Ctrl+C) or SIGTERM, finalise the output file header so it remains playable. |
-| 7 | File output — additional formats | P1 | MP3 (statically linked LAME) and Ogg/Opus (statically linked libopus/libogg). All output formats verified compatible with major transcription tools (whisper.cpp, Fabric AI, cloud APIs). |
+| 7 | File output — additional formats | P1 | MP3 (vendored libmp3lame) and Ogg/Opus (native CoreAudio encoder + hand-written Ogg muxer, zero deps). All output formats verified compatible with major transcription tools (whisper.cpp, Fabric AI, cloud APIs). |
 | 8 | Time-based chunking | P1 | Split recordings into sequential files by duration (`--split duration=SEC`). |
 | 9 | Transcription integration | P1 | Transcription is built into the root verb: any input (live capture or `-i` file/stream) can be transcribed by a local engine (e.g., `whisper.cpp`) via `-t/--transcript`. Audio and transcript can be produced in the same run (`-a rec.m4a -t notes.srt`); naming no output transcribes to stdout. |
 | 12 | Live transcription | P1 | During live capture, emit the transcript incrementally — as close to runtime as possible — by segmenting the stream on natural pauses and transcribing each segment as it completes (true streaming is post-MVP). |
@@ -145,7 +145,7 @@ aural models | config                    # model + default management
 - `-i, --input PATH|"-"` : read an existing audio file, or `-` for stdin, instead of live capture. Mutually exclusive with the live flags above.
 
 **Outputs — name what you want to keep; `-` means stdout:**
-- `-a, --audio PATH|"-"` : write audio. The file extension picks the format (`.wav`, `.m4a`, `.flac`); `-` streams a WAV container to stdout.
+- `-a, --audio PATH|"-"` : write audio. The file extension picks the format (`.wav`, `.m4a`, `.flac`, `.mp3`, `.opus`); `-` streams a WAV container to stdout.
 - `-t, --transcript PATH|"-"` : write a transcript. The file extension picks the format (`.txt`, `.srt`, `.json`); `-` writes text to stdout.
 - *(no output flag)* : transcribe to stdout (the default verb).
 - At most one output may be `-` — stdout carries a single stream.
@@ -158,7 +158,7 @@ aural models | config                    # model + default management
 - `--split duration=SEC` / `--split silence=SEC` : split the audio file into sequentially numbered chunks (requires `-a FILE`; silence threshold via `--silence-threshold` dBFS).
 
 **Format overrides & transcription:**
-- `--format wav|m4a|flac` : force the audio format, overriding the extension.
+- `--format wav|m4a|flac|mp3|opus` : force the audio format, overriding the extension.
 - `--transcript-format txt|srt|json` : force the transcript format, overriding the extension.
 - `-e, --engine whisper|apple|whisperkit` : recognition engine (default `whisper`; `cloud` is post-MVP). Capabilities vary — see §6.6.
 - `--model NAME|PATH` : engine-specific model selector. `whisper`: ggml path or short name (`large-v3-turbo`); `whisperkit`: a WhisperKit model name (`large-v3-v20240930_626MB`); `apple`: ignored (OS assets). whisper precedence: `--model` › `$AURAL_WHISPER_MODEL` › config `model` (`aural config` / `~/.aural/config.json`).
@@ -238,7 +238,7 @@ All invocations accept `-h, --help` and `-v, --verbose`.
 
 - Read: WAV, AIFF, CAF, M4A, FLAC.
 - Write (P0): WAV (PCM), M4A/AAC, FLAC — native CoreAudio encoders.
-- Write (P1): MP3 (statically linked LAME), Ogg/Opus (statically linked libopus/libogg).
+- Write (P1): MP3 (vendored libmp3lame, encode-only — Sources/CLame, LGPL), Ogg/Opus (native `kAudioFormatOpus` encoder + hand-written Ogg muxer, zero external deps).
 - All write formats must be accepted as-is by major transcription tools: `whisper.cpp`, Fabric AI, OpenAI/cloud transcription APIs.
 - Metadata: WAV INFO chunk, MP4 metadata atoms for M4A, ID3v2 for MP3.
 

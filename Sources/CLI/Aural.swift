@@ -86,7 +86,7 @@ struct Aural: ParsableCommand {
     // MARK: Outputs
 
     @Option(name: [.short, .long], help: ArgumentHelp(
-        "Audio output: a file (.wav/.m4a/.flac), or '-' for a WAV stream on stdout.",
+        "Audio output: a file (.wav/.m4a/.flac/.mp3/.opus), or '-' for a WAV stream on stdout.",
         valueName: "path|-"))
     var audio: String?
 
@@ -131,7 +131,7 @@ struct Aural: ParsableCommand {
     // MARK: Format overrides
 
     @Option(name: .customLong("format"), help: ArgumentHelp(
-        "Force the audio format (wav, m4a, flac), overriding the file extension.",
+        "Force the audio format (wav, m4a, flac, mp3, opus), overriding the file extension.",
         valueName: "fmt"))
     var forcedFormat: String?
 

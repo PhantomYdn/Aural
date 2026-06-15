@@ -40,8 +40,8 @@
 - [x] Implement M4A/AAC output via native CoreAudio encoder (P0)
 - [x] Implement FLAC output via native CoreAudio encoder (P0) — note: OS encoder silently corrupts files < 4608 frames; guarded with a clear error
 - [x] Implement format selection: extension-based detection (`.wav`, `.m4a`, `.flac`, `.mp3`, `.opus`) plus `--format` override
-- [ ] Implement MP3 output via statically linked LAME (P1) — deferred: vendor LAME as SwiftPM C target in a dedicated session; `.mp3` currently exits 69
-- [ ] Implement Ogg/Opus output via statically linked libopus/libogg (P1) — deferred; preferred approach: native `kAudioFormatOpus` encoder + hand-written Ogg muxer (zero deps); `.opus` currently exits 69
+- [x] Implement MP3 output (P1): vendored libmp3lame (encode-only) as the `CLame` SwiftPM C target with a minimal hand-written config.h; `Encoders.MP3FileWriter` (mono uses `lame_encode_buffer`, stereo the interleaved API; 24/32-bit down-converted to 16-bit). LGPL noted in NOTICES. Verified: aiff→mp3 mono/stereo round-trip transcribes correctly
+- [x] Implement Ogg/Opus output (P1): native `kAudioFormatOpus` AudioConverter + hand-written `Encoders.OggMuxer` (page framing + Ogg CRC) and `OpusFileWriter` (zero external deps). Key fix: the input proc only reports 0 frames at finalize (a mid-stream 0 permanently flushes the encoder). Verified: aiff→opus mono/stereo (48 kHz and resampled) round-trips the full sentence; valid BOS/EOS Ogg/Opus pages
 - [x] Implement `--split duration=SEC`: sequential files (`name_001`, `name_002`, …) with correctly flushed headers (P1)
 - [x] Implement `--split silence=SEC` with configurable dBFS threshold (`--silence-threshold`, default −50); each chunk independently playable, no audio dropped (P2, US04)
 - [x] Implement `aural convert`: format conversion reusing CoreAudio codecs (PRD §6.1) — verified by lossless tone roundtrips (wav→m4a→wav, wav→flac→wav)
