@@ -106,6 +106,54 @@ output transcribes to stdout.
 Run `aural --help` for the full list, and `aural help <subcommand>` for a
 subcommand's options.
 
+### Speaker labels
+
+`--speakers` (alias `--diarize`) labels each transcript segment with who spoke,
+two ways that combine:
+
+- **Source attribution** — in a meeting capture (`--mix` with `--system`/`--app`),
+  your microphone is labeled **`You`** and the call audio **`Others`**.
+  Deterministic, no model, works on Intel and headless.
+- **Acoustic diarization** — distinct voices within a stream are separated into
+  **`Speaker 1`, `Speaker 2`, …** using on-device CoreML models (Apple Silicon).
+
+By default a meeting is labeled **`You` + `Speaker 1..N`** (your mic, plus each
+remote participant). Use `--speaker-mode source` for the cheap `You`/`Others`
+split with no diarization.
+
+| Flag | Meaning |
+|------|---------|
+| `--speakers`, `--diarize` | enable speaker labels (off by default) |
+| `--speaker-mode auto\|source\|acoustic` | `auto` (default): source + diarization; `source`: You/Others only; `acoustic`: diarize one stream |
+| `--diarize-engine auto\|streaming\|offline` | `auto` (default): streaming live / offline batch; `streaming`: real-time; `offline`: accurate, diarized at end of capture |
+| `--max-speakers N` | cap the number of distinct speakers |
+| `--speaker-threshold 0..1` | clustering sensitivity (default ~0.7; lower splits more, higher merges) |
+| `--speaker-labels "You,Others"` | rename the source labels |
+
+```sh
+# Live meeting: You + Speaker 1/2/… in real time
+aural --system --mix --speakers -t meeting.srt
+
+# Same, but an accurate offline pass (transcript written when you stop)
+aural --system --mix --speakers --diarize-engine offline -t meeting.srt
+
+# Cheap deterministic You/Others (no diarization model)
+aural --system --mix --speakers --speaker-mode source -t -
+
+# Diarize a recording (everyone becomes Speaker N — "You" is live-only)
+aural -i meeting.wav --speakers -t out.json
+
+# Tune sensitivity if speakers merge or over-split
+aural -i meeting.wav --speakers --speaker-threshold 0.55 --max-speakers 6 -t out.srt
+```
+
+The label appears per format: txt `Speaker 1: …`, srt `[Speaker 1] …`, json a
+`"speaker"` field. **Acoustic diarization is Apple-Silicon-only** (on Intel,
+diarized modes fall back to `You`/`Others`); the first use downloads a CoreML
+model — pre-fetch with `aural models download fluidaudio:diarizer`. Live
+segmentation also uses an on-device VAD model (Apple Silicon); disable it with
+`AURAL_VAD=0`.
+
 ### Subcommands
 
 ```sh
@@ -154,6 +202,8 @@ aural models list --available        # downloadable catalog, with an ENGINE colu
 aural models download large-v3-turbo            # whisper ggml
 aural models download whisperkit:large-v3-v20240930_626MB
 aural models download parakeet:v3               # or parakeet:v2 (English-only)
+aural models download fluidaudio:diarizer       # speaker diarization (--speakers)
+aural models download fluidaudio:vad            # live-segmentation VAD
 ```
 
 The first whisper model you download becomes the default. `--default` makes any
@@ -180,6 +230,9 @@ aural config set engine apple
 aural config set silence-threshold -40   # values starting with '-' are taken verbatim
 aural config show
 ```
+
+`AURAL_VAD=0` disables the on-device VAD used for live segmentation (falling
+back to the amplitude `--silence-threshold` method).
 
 The config file is plain JSON and hand-editable; `aural config path` prints its
 location.

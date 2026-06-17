@@ -93,11 +93,25 @@ struct CaptureEngine {
     /// enables the all-zero TCC warning used for system/app taps.
     func run(
         session: CaptureSession, format: PCMFormat, into sinks: [AudioSink],
-        duration: Double?, warnOnSilence: Bool
+        duration: Double?, warnOnSilence: Bool,
+        sourceSinks: [(CaptureSource, AudioSink)] = []
     ) throws {
         // SIGPIPE is ignored so a closed downstream pipe surfaces as a write
         // error (EPIPE) and is handled as graceful completion.
         signal(SIGPIPE, SIG_IGN)
+
+        // Source attribution: route each separated source to its sink(s) in
+        // addition to the mixed stream. The session delivers these on its IO
+        // thread; sink writes are forwarded directly (errors surface later via
+        // each sink's own error path).
+        if !sourceSinks.isEmpty, var multi = session as? MultiTrackCaptureSession {
+            let routes = sourceSinks
+            multi.onSourceAudio = { source, data in
+                for (tag, sink) in routes where tag == source {
+                    try? sink.write(data)
+                }
+            }
+        }
         let ioQueue = DispatchQueue(label: "aural.capture.io")
         let failure = FailureBox()
         let done = DispatchSemaphore(value: 0)
@@ -152,10 +166,11 @@ struct CaptureEngine {
         done.wait()
         watcher.cancel()
 
-        // Tear down: stop capture, drain pending writes, finalize sinks.
+        // Tear down: stop capture, drain pending writes, finalize sinks
+        // (mixed first, then the per-source attribution sinks).
         session.stop()
         ioQueue.sync {}
-        for sink in sinks {
+        for sink in sinks + sourceSinks.map(\.1) {
             do {
                 try sink.finalize()
             } catch {

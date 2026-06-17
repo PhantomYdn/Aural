@@ -69,6 +69,30 @@ The first use triggers the prompt; on-device locale assets may download on
 first use of a language. The `whisper` and `whisperkit` engines don't need
 this permission.
 
+## Speaker labels & VAD (`--speakers`, live segmentation)
+
+Speaker diarization (`--speakers`) and the live-segmentation VAD operate on
+audio Aural has **already captured**, so they need **no additional TCC
+permission** beyond the mic/system-audio grants above.
+
+They do use on-device CoreML models (FluidAudio, Apple Silicon) that are
+**downloaded from Hugging Face on first use**, then run fully offline:
+
+- The VAD model is fetched on the first live transcription (it improves segment
+  boundaries). Disable it entirely with `AURAL_VAD=0`.
+- The diarization model is fetched the first time you use `--speakers` with
+  acoustic diarization.
+
+Pre-fetch both to avoid a first-run download (e.g. for offline/air-gapped use):
+
+```sh
+aural models download fluidaudio:vad
+aural models download fluidaudio:diarizer
+```
+
+On Intel Macs, acoustic diarization is unavailable; diarized modes fall back to
+deterministic `You`/`Others` source attribution (which needs no model).
+
 ## Multiplexers (tmux, screen)
 
 Permission attribution resolves through tmux/screen to the terminal that

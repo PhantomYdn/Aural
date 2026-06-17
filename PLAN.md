@@ -185,6 +185,89 @@
 - [~] Step 5 — docs/tests: [x] README/man (`--capture-backend`, both permissions, `$AURAL_CAPTURE`, headless note); [x] unit tests (`StreamMixingTests`, CLI backend resolution/validation); [x] `Scripts/verify-live.sh` step [6] covers both backends (sckit perm/headless → SKIP). Pending (needs Screen Recording grant + GUI): [ ] sckit end-to-end audio live test; [ ] re-run the 60-min mic/system drift validation for both `--mix` paths
 - [x] `aural apps` stays HAL-based (headless-friendly); the SCKit backend maps bundle id/PID → `SCRunningApplication` internally (`ScreenCaptureSession.match`)
 
+## Phase 8: Speaker Recognition & Runtime Segmentation (PRD M7, §6.7)
+
+> Adds "who said what" (source attribution + acoustic diarization) and replaces
+> the amplitude-only live segmenter ("delay in a sound") with VAD. Reuses the
+> already-linked `FluidInference/FluidAudio` dependency (no new SwiftPM dep —
+> only model assets). Opt-in via `--speakers`; default transcript output is
+> unchanged. Diarization/VAD are Apple-Silicon-first; source attribution is
+> platform-agnostic. Mirrors existing patterns: `ParakeetBackend` (FluidAudio
+> load-once + `RunLoopBridge`), `ModelCatalog`/`ModelsCommand` (engine-tagged
+> download), `Platform.requireAppleSilicon`, `TranscriptionEngine` dispatch.
+
+### Phase 8.0 — Spec & docs (in progress; scope still being refined)
+
+- [ ] PRD §6.7 + supporting edits drafted (FR rows 15–19, §4.2, US08, §6.1 flags, §6.6 VAD note, §7, §8, §9 M7, §10 Open Qs) — **under active review, not finalized**
+- [x] PRD §6.7/§7 reconciled to the implemented VAD behavior (default-on on Apple Silicon, Silero model fetched on first live run, opt-out `AURAL_VAD=0`, amplitude fallback)
+- [ ] PRD §6.1 reconciliation: `--speakers` flag + `--speaker-mode` (vs the drafted `--speakers[=mode]`)
+- [ ] docs/permissions.md: diarization/VAD need **no new TCC** (operate on already-captured audio) but fetch FluidAudio CoreML models from Hugging Face on first use
+- [ ] README/man deferred to 8.7 (kept with the feature's other user-facing docs)
+
+### Phase 8.1 — VAD-based live segmentation (the runtime fix; no labels yet)
+
+- [x] `SpeechSegmenter` protocol so the amplitude boundary can be swapped; `StreamSegmenter` conforms (`SpeechSegmenter`/`VadSegmenter` in `VadSegmenter.swift`)
+- [x] `VadSegmenter`: single consumer `Task` over an unbounded `AsyncStream`; unpack→mono→resample(16k)→4096-sample windows→full streaming state machine (`speechStart`/`speechEnd`), maxWindow/minSegment/leading-trim; sample-accurate byte-clock timestamps
+- [x] `VoiceActivityStream` abstraction + `FluidVadClassifier` (FluidAudio `VadManager.processStreamingChunk`, model loaded once)
+- [x] `SpeechSegmenterFactory`: VAD by default on Apple Silicon (first-run download), graceful fallback to the amplitude method on Intel / load failure; `AURAL_VAD=0` to force-disable; `--silence-threshold` stays the fallback knob
+- [x] Wired into `LiveTranscriber` behind the abstraction (`LiveTranscriber.swift:51`)
+- [x] Tests: `VadSegmenterTests` (synthetic `ScriptedVAD` — boundary/clock/max/min/trailing-flush) + gated `AURAL_TEST_VAD=1` real-model integration; existing live e2e pinned to `AURAL_VAD=0`
+- [ ] Live-capture e2e of the VAD segmenter (real mic/system) — on the pending-live list (covered offline by the synthetic + gated tests)
+
+### Phase 8.2 — Speaker label data model + output formats
+
+- [x] Added optional `speaker` to `TranscriptCue` (`EngineSupport.swift`) and the live/batch JSON `Segment` structs (`LiveTranscriptWriter.jsonLine`, `TranscriptFormatting.render`) — nil omits the key (encodeIfPresent), so default output is byte-identical
+- [x] Render labels: txt `You: …`/`Speaker 1: …`; srt `[Speaker 1] text` (valid SRT); json `"speaker"` field — in both `TranscriptFormatting.render` and `LiveTranscriptWriter.append`
+- [x] Added `--speakers` (alias `--diarize`) + `--speaker-mode auto|source|acoustic` + `--speaker-labels "You,Others"` to `Aural.swift`; validation (mode/labels require `--speakers`; `source` needs two sources; labels must be a pair). Note: implemented as a `--flag` + `--speaker-mode` rather than `--speakers[=mode]` (ArgumentParser has no optional-value options); PRD §6.1 to be reconciled in 8.0
+- [x] No output change unless `--speakers` is set; with the label backends pending, `--speakers` surfaces a clear "planned — Phase 8.3/8.4" runtime error (exit 69)
+- [x] Tests: label rendering for all three formats incl. missing speaker (default unchanged) + flag accept/reject combos
+
+### Phase 8.3 — Source attribution (You vs Others), no ML
+
+- [x] Multi-track capture: deliver mic and system as separate PCM streams while keeping the mixed stream for `-a`
+  - [x] Core Audio: `StreamMixer` gains `systemBuffer`/`micBuffer` (tap-only and mic-only in tap layout); `SystemCaptureSession` converts each via per-source converters and emits via `onSourceAudio`
+  - [x] ScreenCaptureKit: tees the already-separate `.audio`/`.microphone` outputs via `onSourceAudio` before `drainMix`
+  - [x] `MultiTrackCaptureSession` protocol (`CaptureSource` .microphone/.system) in TapEngine
+- [x] Route per-source PCM to per-source `LiveTranscriber`s sharing one engine (`SerializedBackend`) + one transcript writer, tagging mic=You / system=Others (`--speaker-labels`); `CaptureEngine.run(sourceSinks:)` routes + finalizes them
+- [x] Mixed `-a` audio output unchanged; works headless and on Intel (no ML)
+- [x] Tests: `StreamMixer` per-source extraction (synthetic buffer list), shared-writer label routing, `SpeakerLabels` parsing, flag accept/reject combos
+- [ ] Live-capture e2e (real mic/system) — pending-live list (covered offline by the unit tests; capture path can't run permission-free)
+
+### Phase 8.4 — Acoustic diarization via FluidAudio (Speaker N)
+
+- [x] `--diarize-engine auto|streaming|offline` + `--max-speakers N` flags + validation (require `--speakers`); Apple-Silicon gate
+- [x] Offline (batch `-i`): `SpeakerDiarizer` (FluidAudio `DiarizerManager`, model loaded once) + `BatchDiarization` — diarize, then transcribe each speaker span independently (engine-agnostic: reuses the shared transcribe-a-WAV primitive, so it works with whisper/whisperkit/parakeet/apple) → labeled cues. `SpeakerLabeling.normalize` numbers `Speaker N` by first appearance and merges adjacent same-speaker spans
+- [x] First-use model download into FluidAudio's cache (RunLoopBridge pattern, like `ParakeetBackend`)
+- [x] `--speaker-threshold 0..1` clustering-sensitivity knob (→ `DiarizerConfig.clusteringThreshold`); verified it splits a hard pair that merges at the default
+- [x] **Streaming (live) diarization** — implemented via per-segment **embedding clustering** (`extractSpeakerEmbedding` + `SpeakerManager.assignSpeaker`), not LS-EEND: simpler, reuses the VAD segmentation. `StreamingDiarizer` + `ClusteringSpeakerResolver` assign `Speaker N` per live segment; `LiveTranscriber` gained an optional per-segment resolver
+- [x] Tests: `SpeakerLabeling.normalize` + `SpeakerNumbering` (pure), `BatchDiarization.merge` ordering, resolver-overrides-fixed-label, catalog parse, env-gated integration (`AURAL_TEST_DIARIZE=1`)
+
+### Phase 8.5 — Combined source-split + per-source diarization
+
+- [x] `--speakers` (auto/acoustic) on a meeting: mic→`You` (constant) + system diarized → `You + Speaker 1..N`. `--speaker-mode source` keeps the cheap deterministic You/Others split
+- [x] **Streaming** (`--diarize-engine streaming`, default live): real-time `Speaker N` via embedding clustering on the system (or single) stream
+- [x] **Offline-live** (`--diarize-engine offline`): record mic+system to temp WAVs during capture; at stop, offline-diarize the system track (accurate) + force mic to `You`, merge cues by time → transcript at end (`runOfflineLive`)
+- [x] Single-stream live acoustic (`--speakers` on mic-only / system-only) → `Speaker N`; the old "planned" guard is lifted. Intel downgrades to source-only/none with a notice
+- [x] `--diarize-engine` resolution: `auto` → streaming (live) / offline (batch); `--max-speakers`, `--speaker-threshold` thread through both
+- [x] Stable `Speaker N` namespace (first-appearance numbering); `You` is live-only (a mixed `-i` file → `Speaker N` for all, including you)
+- [x] Tests: numbering/merge/resolver (pure + offline); verified live-style separation on a 2-voice clip via the raw-PCM pipeline
+- [ ] Live-capture e2e of streaming diarization (real multi-party call) — pending-live list (can't run permission-free; offline 2-voice + unit tests cover the logic)
+
+### Phase 8.6 — Model management & config
+
+- [x] `ModelCatalog` parses/lists `fluidaudio:diarizer` / `fluidaudio:vad`; `aural models download` dispatches to FluidAudio loaders (`SpeakerDiarizer.download` / `FluidVadClassifier.downloadModel`); never adopted as the transcription default; `list --available` shows them ("speaker pipeline")
+- [x] `aural models list` (local) shows the FluidAudio cache correctly: `FluidAudioCache.engine(forBundle:)` classifies each bundle (`*parakeet*` → parakeet; `silero-vad`/`speaker-diarization` → fluidaudio), and `coreMLModels` flags the configured CoreML default as `current` (so `parakeet-tdt-0.6b-v3` gets `*`); a no-default hint prints when nothing resolves
+- [x] **Model-load UX fix:** VAD loads once per process (shared static `VadManager`, shared across the two source-attribution streams; per-stream state); cached loads are silent (`Log.verbose`), with a one-time `downloading … (first use)` notice only on a real fetch — replacing the misleading per-run "preparing … (first run may download)" notice. (FluidAudio's own INFO logging is DEBUG-only; release stderr is clean.)
+- [ ] `Configuration`/`ResolvedSettings`: defaults for `speakers`/`diarize-engine`/`speaker-labels`; precedence flag › env (`$AURAL_SPEAKERS`, `$AURAL_DIARIZE_ENGINE`, `AURAL_VAD`) › config › default (only `AURAL_VAD` wired so far)
+- [x] Tests: catalog parse (`fluidaudio:` tags + `available()` coverage)
+
+### Phase 8.7 — Validation & user-facing docs
+
+- [ ] NFR: live label latency (tentative ≤1s, final ≤2s), streaming RTF<1 on Apple Silicon (PRD §7)
+- [ ] Diarization DER on a reference clip set; segmentation-stability check (fewer spurious cuts than the amplitude method) — PRD §8
+- [x] Docs: README "Speaker labels" section (flags table + examples + caveats) + `fluidaudio:` model rows + `AURAL_VAD`; man `SPEAKER LABELING` section + `AURAL_VAD` + examples (mandoc clean); docs/permissions.md diarization/VAD note (no new TCC, first-use model fetch); corrected the stale `--speakers`/`--diarize-engine` `--help` strings (no longer say "planned")
+- [ ] `Scripts/verify-live.sh`: add a gated `--system --mix --speakers` smoke step (perms/arch → SKIP)
+
 ## Future
 
 > Nice-to-have items outside current scope.
@@ -198,3 +281,5 @@
 - [ ] Configuration profiles for default sources, formats, transcription settings
 - [ ] Cloud transcription backends (Deepgram, Google) via `--engine cloud`
 - [ ] Silence-based voice activity detection for trimming
+- [ ] Named speaker identification: voiceprint enrollment + local speaker store (FluidAudio embeddings) (PRD §4.2 / Open Q5)
+- [ ] Overlapping-speech handling / per-word speaker assignment (PRD Open Q6)

@@ -17,7 +17,11 @@ final class LiveTranscriber: AudioSink, @unchecked Sendable {
     private let translate: Bool
     private let writer: LiveTranscriptWriter
     private let format: PCMFormat
-    private let segmenter: StreamSegmenter
+    private let segmenter: SpeechSegmenter
+    private let speaker: String?
+    private let resolver: LiveSpeakerResolver?
+    private let ownsBackend: Bool
+    private let ownsWriter: Bool
 
     private var totalBytes: UInt64 = 0
 
@@ -28,7 +32,53 @@ final class LiveTranscriber: AudioSink, @unchecked Sendable {
 
     let label: String
 
+    /// Designated init. `ownsBackend`/`ownsWriter` control teardown so several
+    /// transcribers can share one engine + transcript (source attribution).
+    /// `speaker`, when set, labels every emitted segment (PRD §6.7).
     init(
+        backend: TranscriptionBackend,
+        writer: LiveTranscriptWriter,
+        ownsBackend: Bool,
+        ownsWriter: Bool,
+        speaker: String?,
+        language: String?,
+        translate: Bool,
+        captureFormat: PCMFormat,
+        silenceThresholdDBFS: Double,
+        labelName: String,
+        resolver: LiveSpeakerResolver? = nil,
+        pauseSeconds: Double = 0.7,
+        maxWindowSeconds: Double = 12,
+        minSegmentSeconds: Double = 0.4
+    ) {
+        self.transcriber = backend
+        self.writer = writer
+        self.ownsBackend = ownsBackend
+        self.ownsWriter = ownsWriter
+        self.speaker = speaker
+        self.resolver = resolver
+        self.language = language
+        self.translate = translate
+        self.format = captureFormat
+        self.segmenter = SpeechSegmenterFactory.make(
+            format: captureFormat, silenceThresholdDBFS: silenceThresholdDBFS,
+            pauseSeconds: pauseSeconds, maxWindowSeconds: maxWindowSeconds,
+            minSegmentSeconds: minSegmentSeconds)
+        self.label = labelName
+
+        // The segmenter calls back synchronously on the capture I/O queue;
+        // hand each finished segment to the serial transcription worker.
+        segmenter.onSegment = { [weak self] segment, start, end in
+            self?.enqueue(segment, start: start, end: end)
+        }
+        Log.verbose("""
+            live transcription: \(transcriber.label)\(speaker.map { " [\($0)]" } ?? ""); \
+            pause \(pauseSeconds)s, window \(maxWindowSeconds)s, threshold \(silenceThresholdDBFS) dBFS
+            """)
+    }
+
+    /// Single-stream convenience: builds its own engine + transcript writer.
+    convenience init(
         destination: TranscriptDestination,
         transcriptFormat: TranscriptOutputFormat,
         engineName: String,
@@ -41,28 +91,39 @@ final class LiveTranscriber: AudioSink, @unchecked Sendable {
         maxWindowSeconds: Double = 12,
         minSegmentSeconds: Double = 0.4
     ) throws {
-        self.transcriber = try TranscriptionEngine.makeLive(
+        let backend = try TranscriptionEngine.makeLive(
             engineName: engineName, modelFlag: modelFlag, language: language, quiet: !Log.isVerbose)
-        self.language = language
-        self.translate = translate
-        self.format = captureFormat
-        self.writer = try LiveTranscriptWriter(
-            destination: destination, format: transcriptFormat)
-        self.segmenter = StreamSegmenter(
-            format: captureFormat, silenceThresholdDBFS: silenceThresholdDBFS,
+        let writer = try LiveTranscriptWriter(destination: destination, format: transcriptFormat)
+        self.init(
+            backend: backend, writer: writer, ownsBackend: true, ownsWriter: true, speaker: nil,
+            language: language, translate: translate, captureFormat: captureFormat,
+            silenceThresholdDBFS: silenceThresholdDBFS, labelName: "live transcript -> \(destination.label)",
             pauseSeconds: pauseSeconds, maxWindowSeconds: maxWindowSeconds,
             minSegmentSeconds: minSegmentSeconds)
-        self.label = "live transcript -> \(destination.label)"
+    }
 
-        // The segmenter calls back synchronously on the capture I/O queue;
-        // hand each finished segment to the serial transcription worker.
-        segmenter.onSegment = { [weak self] segment, start, end in
-            self?.enqueue(segment, start: start, end: end)
-        }
-        Log.verbose("""
-            live transcription: \(transcriber.label); pause \(pauseSeconds)s, \
-            window \(maxWindowSeconds)s, threshold \(silenceThresholdDBFS) dBFS
-            """)
+    /// Source-attribution convenience: shares an engine + transcript writer with
+    /// the other source pipeline. `speaker` is the fallback label; a `resolver`
+    /// (acoustic diarization) overrides it per segment when set.
+    convenience init(
+        sharedWriter: LiveTranscriptWriter,
+        sharedBackend: TranscriptionBackend,
+        speaker: String,
+        resolver: LiveSpeakerResolver? = nil,
+        language: String?,
+        translate: Bool,
+        captureFormat: PCMFormat,
+        silenceThresholdDBFS: Double,
+        pauseSeconds: Double = 0.7,
+        maxWindowSeconds: Double = 12,
+        minSegmentSeconds: Double = 0.4
+    ) {
+        self.init(
+            backend: sharedBackend, writer: sharedWriter, ownsBackend: false, ownsWriter: false,
+            speaker: speaker, language: language, translate: translate, captureFormat: captureFormat,
+            silenceThresholdDBFS: silenceThresholdDBFS, labelName: "live transcript [\(speaker)]",
+            resolver: resolver, pauseSeconds: pauseSeconds, maxWindowSeconds: maxWindowSeconds,
+            minSegmentSeconds: minSegmentSeconds)
     }
 
     func write(_ data: Data) throws {
@@ -77,10 +138,11 @@ final class LiveTranscriber: AudioSink, @unchecked Sendable {
         worker.async { [weak self] in
             guard let self, self.failure.take() == nil else { return }
             do {
-                let text = try self.transcribeSegment(segment, format: segFormat)
+                let (text, speaker) = try self.transcribeSegment(
+                    segment, format: segFormat, durationSeconds: end - start)
                 let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
                 if !trimmed.isEmpty && !Self.isNonSpeech(trimmed) {
-                    try self.writer.append(text: trimmed, start: start, end: end)
+                    try self.writer.append(text: trimmed, start: start, end: end, speaker: speaker)
                 }
             } catch {
                 _ = self.failure.store(error)
@@ -89,8 +151,11 @@ final class LiveTranscriber: AudioSink, @unchecked Sendable {
     }
 
     /// Stages one segment as a temporary WAV, normalizes it to whisper's
-    /// 16 kHz mono format, and returns the recognized text.
-    private func transcribeSegment(_ pcm: Data, format: PCMFormat) throws -> String {
+    /// 16 kHz mono format, and returns the recognized text plus its speaker
+    /// label (from the optional acoustic resolver, else the fixed label).
+    private func transcribeSegment(
+        _ pcm: Data, format: PCMFormat, durationSeconds: Double
+    ) throws -> (text: String, speaker: String?) {
         let raw = FileManager.default.temporaryDirectory
             .appendingPathComponent("aural-seg-\(UUID().uuidString).wav")
         defer { try? FileManager.default.removeItem(at: raw) }
@@ -100,16 +165,20 @@ final class LiveTranscriber: AudioSink, @unchecked Sendable {
 
         let normalized = try AudioPipeline.normalizeFileForWhisper(raw.path)
         defer { try? FileManager.default.removeItem(at: normalized) }
-        return try transcriber.transcribe(
+        let text = try transcriber.transcribe(
             wavFile: normalized, language: language, translate: translate, format: .txt)
+        let speaker = resolver?.label(forWav: normalized, durationSeconds: durationSeconds)
+            ?? self.speaker
+        return (text, speaker)
     }
 
     func finalize() throws {
-        // Emit the trailing segment, drain the queue, then release the engine.
+        // Emit the trailing segment, drain the queue, then release owned
+        // resources (a shared engine/writer is released by its owner).
         segmenter.finish()
         worker.sync {}
-        transcriber.shutdown()
-        try? writer.close()
+        if ownsBackend { transcriber.shutdown() }
+        if ownsWriter { try? writer.close() }
     }
 
     /// Surfaces a stored transcription error after capture finishes. Broken
@@ -141,7 +210,7 @@ final class LiveTranscriber: AudioSink, @unchecked Sendable {
 ///
 /// `consume`/`finish` and `onSegment` are driven serially from the capture
 /// I/O queue; the class holds no locks.
-final class StreamSegmenter {
+final class StreamSegmenter: SpeechSegmenter {
     private let format: PCMFormat
     private let silenceBoundaryBytes: Int
     private let maxWindowBytes: Int
@@ -245,18 +314,19 @@ final class LiveTranscriptWriter: @unchecked Sendable {
         }
     }
 
-    func append(text: String, start: Double, end: Double) throws {
+    func append(text: String, start: Double, end: Double, speaker: String? = nil) throws {
         lock.lock()
         defer { lock.unlock() }
         let chunk: String
         switch format {
         case .txt:
-            chunk = text + "\n"
+            chunk = (speaker.map { "\($0): " } ?? "") + text + "\n"
         case .srt:
             cueIndex += 1
-            chunk = "\(cueIndex)\n\(Self.srtTimestamp(start)) --> \(Self.srtTimestamp(end))\n\(text)\n\n"
+            let body = (speaker.map { "[\($0)] " } ?? "") + text
+            chunk = "\(cueIndex)\n\(Self.srtTimestamp(start)) --> \(Self.srtTimestamp(end))\n\(body)\n\n"
         case .json:
-            chunk = Self.jsonLine(start: start, end: end, text: text) + "\n"
+            chunk = Self.jsonLine(start: start, end: end, text: text, speaker: speaker) + "\n"
         }
         do {
             try handle.write(contentsOf: Data(chunk.utf8))
@@ -279,16 +349,20 @@ final class LiveTranscriptWriter: @unchecked Sendable {
         return String(format: "%02d:%02d:%02d,%03d", hours, minutes, secs, millis)
     }
 
-    /// One-line JSON object for JSON-lines output.
-    static func jsonLine(start: Double, end: Double, text: String) -> String {
+    /// One-line JSON object for JSON-lines output. `speaker` is optional and
+    /// omitted when nil (synthesized encodeIfPresent), so default output is
+    /// byte-identical to the no-speaker case.
+    static func jsonLine(start: Double, end: Double, text: String, speaker: String? = nil) -> String {
         struct Segment: Encodable {
             let start: Double
             let end: Double
             let text: String
+            let speaker: String?
         }
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.withoutEscapingSlashes]
-        guard let data = try? encoder.encode(Segment(start: start, end: end, text: text)) else {
+        let segment = Segment(start: start, end: end, text: text, speaker: speaker)
+        guard let data = try? encoder.encode(segment) else {
             return "{\"start\":\(start),\"end\":\(end),\"text\":\"\"}"
         }
         return String(decoding: data, as: UTF8.self)

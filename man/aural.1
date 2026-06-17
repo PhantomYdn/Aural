@@ -1,5 +1,5 @@
 .\" Manpage for aural.
-.TH AURAL 1 2026-06-15 "aural 0.1.0" "User Commands"
+.TH AURAL 1 2026-06-16 "aural 0.1.0" "User Commands"
 .SH NAME
 aural \- capture audio and produce transcripts on macOS
 .SH SYNOPSIS
@@ -166,6 +166,78 @@ Force the audio format, overriding the file extension.
 .TP
 .BI \-\-transcript\-format " txt|srt|json"
 Force the transcript format, overriding the file extension.
+.SH SPEAKER LABELING
+Label transcript segments with who spoke (PRD \[char167]6.7). Two mechanisms
+combine: deterministic
+.I source attribution
+(the microphone is
+.BR You ,
+the system audio
+.BR Others )
+and on\-device acoustic
+.I diarization
+(distinct voices become
+.BR "Speaker 1" ,
+.BR "Speaker 2" ,
+\&...). Diarization needs Apple Silicon; source attribution works anywhere.
+The label is rendered per format: txt
+.BR "Speaker 1: ..." ,
+srt
+.BR "[Speaker 1] ..." ,
+json a
+.B speaker
+field.
+.TP
+.BR \-\-speakers ", " \-\-diarize
+Enable speaker labels (off by default). A meeting capture
+.RB ( \-\-mix
+with
+.BR \-\-system / \-\-app )
+is labeled
+.B You
+plus
+.BR "Speaker 1..N" .
+A transcript output is required.
+.TP
+.BI \-\-speaker\-mode " auto|source|acoustic"
+.B auto
+(default): source attribution plus diarization;
+.B source
+: only
+.BR You / Others
+(no model);
+.B acoustic
+: diarize a single stream.
+.TP
+.BI \-\-diarize\-engine " auto|streaming|offline"
+.B auto
+(default): streaming for live capture, offline for
+.BR \-i
+files.
+.B streaming
+: real\-time per\-segment clustering.
+.B offline
+: record, then diarize accurately at stop (transcript at end).
+.TP
+.BI \-\-max\-speakers " N"
+Cap the number of distinct speakers.
+.TP
+.BI \-\-speaker\-threshold " 0..1"
+Acoustic clustering sensitivity (default ~0.7). Lower splits speakers more
+readily; higher merges them.
+.TP
+.BI \-\-speaker\-labels " You,Others"
+Rename the two source\-attribution labels.
+.PP
+.B You
+is a live\-only label: a single mixed
+.B \-i
+file cannot separate your voice, so everyone is
+.BR "Speaker N" .
+Acoustic models download from Hugging Face on first use
+.RB ( "aural models download fluidaudio:diarizer" );
+on Intel, diarized modes fall back to
+.BR You / Others .
 .SH OTHER OPTIONS
 .TP
 .BR \-v ", " \-\-verbose
@@ -243,6 +315,14 @@ Override the whisper.cpp CLI / server binary path.
 Set to
 .B 0
 to disable the resident whisper\-server backend.
+.TP
+.B AURAL_VAD
+Set to
+.B 0
+to disable the on\-device VAD used for live segmentation (falls back to the
+amplitude
+.B \-\-silence\-threshold
+method).
 .SH FILES
 .TP
 .I ~/.aural/config.json
@@ -291,6 +371,22 @@ Capture a meeting (system + mic), keeping audio and subtitles:
 .RS
 .nf
 aural \-\-system \-\-mix \-a meeting.m4a \-t meeting.srt
+.fi
+.RE
+.PP
+Label a meeting by speaker (You + Speaker 1..N), live:
+.PP
+.RS
+.nf
+aural \-\-system \-\-mix \-\-speakers \-t meeting.srt
+.fi
+.RE
+.PP
+Diarize a recording, tuning sensitivity:
+.PP
+.RS
+.nf
+aural \-i meeting.wav \-\-speakers \-\-speaker\-threshold 0.55 \-t out.json
 .fi
 .RE
 .PP

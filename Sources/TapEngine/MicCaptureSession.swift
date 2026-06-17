@@ -62,6 +62,21 @@ public protocol CaptureSession: AnyObject, Sendable {
     func stop()
 }
 
+/// One side of a mixed capture, for source attribution ("You" vs "Others").
+public enum CaptureSource: String, Sendable {
+    case microphone
+    case system
+}
+
+/// A capture session that can additionally deliver each source as a separate
+/// packed-PCM stream (same output format), in parallel with the mixed `onAudio`
+/// stream — enabling deterministic source attribution while `--mix` is active
+/// (PRD §6.7a). Set `onSourceAudio` before `start`; it is invoked on the same
+/// IO thread as `onAudio`. Only meaningful when a microphone is mixed in.
+public protocol MultiTrackCaptureSession: CaptureSession {
+    var onSourceAudio: (@Sendable (CaptureSource, Data) -> Void)? { get set }
+}
+
 /// Captures audio from a microphone/input device and delivers interleaved
 /// little-endian signed PCM in the requested format.
 ///

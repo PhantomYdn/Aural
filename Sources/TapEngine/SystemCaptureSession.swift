@@ -12,7 +12,7 @@ import Foundation
 ///
 /// Reading a tap requires the "System Audio Recording" TCC permission; for
 /// command-line tools macOS attributes it to the launching terminal.
-public final class SystemCaptureSession: CaptureSession, @unchecked Sendable {
+public final class SystemCaptureSession: MultiTrackCaptureSession, @unchecked Sendable {
     private let scope: TapScope
     private let micDeviceUID: String?
     private let outputFormat: PCMFormat
@@ -22,6 +22,13 @@ public final class SystemCaptureSession: CaptureSession, @unchecked Sendable {
     private var ioProcID: AudioDeviceIOProcID?
     private var converter: PCMStreamConverter?
     private var mixer: StreamMixer?
+    // Per-source converters (built in start() when source attribution is on).
+    private var systemConverter: PCMStreamConverter?
+    private var micConverter: PCMStreamConverter?
+
+    /// When set before `start` (and a mic is mixed in), each source is also
+    /// delivered separately for attribution (PRD §6.7a).
+    public var onSourceAudio: (@Sendable (CaptureSource, Data) -> Void)?
     private let ioQueue = DispatchQueue(label: "aural.tap.io")
     private var started = false
     private var processListListener: AudioObjectPropertyListenerBlock?
@@ -136,6 +143,17 @@ public final class SystemCaptureSession: CaptureSession, @unchecked Sendable {
         let mixer = micDeviceUID != nil ? StreamMixer(tapChannels: Int(liveASBD.mChannelsPerFrame)) : nil
         self.mixer = mixer
 
+        // Source attribution (`--speakers`): convert the tap-only and mic-only
+        // signals separately (both in tap layout) alongside the mix. Built only
+        // when mixing and a per-source consumer is attached.
+        let deliverSources = micDeviceUID != nil && onSourceAudio != nil
+        if deliverSources {
+            self.systemConverter = try PCMStreamConverter(
+                inputFormat: tapFormat, outputFormat: outputFormat)
+            self.micConverter = try PCMStreamConverter(
+                inputFormat: tapFormat, outputFormat: outputFormat)
+        }
+
         // 4. IO callback: wrap tap bytes, convert, deliver.
         let debug = ProcessInfo.processInfo.environment["AURAL_DEBUG"] != nil
         nonisolated(unsafe) var callbackCount = 0
@@ -174,6 +192,22 @@ public final class SystemCaptureSession: CaptureSession, @unchecked Sendable {
             guard let buffer, buffer.frameLength > 0 else { return }
             if let data = converter.convert(buffer) {
                 onAudio(data)
+            }
+
+            // Source attribution: deliver tap-only and mic-only streams too.
+            if let onSourceAudio = self.onSourceAudio, let mixer = self.mixer,
+                let systemConverter = self.systemConverter, let micConverter = self.micConverter
+            {
+                if let systemBuffer = mixer.systemBuffer(from: inInputData, tapFormat: tapFormat),
+                    let data = systemConverter.convert(systemBuffer)
+                {
+                    onSourceAudio(.system, data)
+                }
+                if let micBuffer = mixer.micBuffer(from: inInputData, tapFormat: tapFormat),
+                    let data = micConverter.convert(micBuffer)
+                {
+                    onSourceAudio(.microphone, data)
+                }
             }
         }
         guard status == noErr, ioProcID != nil else {

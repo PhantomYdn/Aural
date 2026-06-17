@@ -145,11 +145,17 @@ enum ModelRegistry {
             .sorted { $0.name < $1.name }
     }
 
-    /// Lists CoreML model bundles cached under `directory` for `engine`
-    /// (whisperkit/parakeet). A "model" is the directory containing one or more
-    /// `.mlmodelc` bundles; best-effort, returns empty when nothing is cached.
+    /// Lists CoreML model bundles cached under `directory`. A "model" is the
+    /// directory containing one or more `.mlmodelc` bundles; best-effort,
+    /// returns empty when nothing is cached. `classifyEngine`, when given, maps
+    /// each bundle name to its engine (the FluidAudio cache mixes parakeet with
+    /// the fluidaudio VAD/diarization helpers); otherwise the fixed `engine` is
+    /// used. The bundle whose engine + name matches the configured default is
+    /// flagged `current`.
     static func coreMLModels(
-        engine: String, directory: URL, fileManager: FileManager = .default
+        engine: String, directory: URL, fileManager: FileManager = .default,
+        classifyEngine: ((String) -> String)? = nil,
+        config: Configuration = .load()
     ) -> [LocalModel] {
         guard let walker = fileManager.enumerator(
             at: directory, includingPropertiesForKeys: [.isDirectoryKey],
@@ -160,10 +166,14 @@ enum ModelRegistry {
         }
         return variants
             .map { dir in
-                LocalModel(
-                    name: dir.lastPathComponent, path: dir.path,
+                let name = dir.lastPathComponent
+                let resolvedEngine = classifyEngine?(name) ?? engine
+                let isCurrent = resolvedEngine == config.engine
+                    && (config.model.map { name.contains($0) } ?? false)
+                return LocalModel(
+                    name: name, path: dir.path,
                     sizeBytes: directorySize(dir, fileManager: fileManager),
-                    engine: engine, current: false)
+                    engine: resolvedEngine, current: isCurrent)
             }
             .sorted { $0.name < $1.name }
     }

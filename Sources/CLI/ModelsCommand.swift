@@ -52,11 +52,15 @@ struct ModelsList: ParsableCommand {
     }
 
     private func listLocal() throws {
+        let config = Configuration.load()
         let models = ModelRegistry.localModels()
             + ModelRegistry.coreMLModels(
-                engine: "whisperkit", directory: WhisperKitBackend.downloadBase)
+                engine: "whisperkit", directory: WhisperKitBackend.downloadBase, config: config)
+            // The FluidAudio cache mixes parakeet ASR with the fluidaudio
+            // VAD/diarization helpers; classify each bundle by name.
             + ModelRegistry.coreMLModels(
-                engine: "parakeet", directory: ParakeetBackend.downloadBase)
+                engine: "fluidaudio", directory: FluidAudioCache.modelsDirectory,
+                classifyEngine: FluidAudioCache.engine(forBundle:), config: config)
         if json {
             print(try OutputFormatting.json(models))
             return
@@ -65,7 +69,7 @@ struct ModelsList: ParsableCommand {
             print("no models in \(ModelRegistry.modelsDirectory.path)")
             print("see downloadable models with: aural models list --available")
             print("then fetch one with:          aural models download base.en")
-            printCurrentOutsideNote(models: models)
+            printCurrentNote(models: models)
             return
         }
         let rows = models.map {
@@ -74,7 +78,7 @@ struct ModelsList: ParsableCommand {
         }
         print(OutputFormatting.table(
             header: ["NAME", "ENGINE", "SIZE", "CURRENT", "PATH"], rows: rows))
-        printCurrentOutsideNote(models: models)
+        printCurrentNote(models: models)
     }
 
     private func listAvailable() throws {
@@ -91,6 +95,7 @@ struct ModelsList: ParsableCommand {
             switch m.engine {
             case "whisperkit": return wkCache.contains { $0.name.contains(m.modelId) }
             case "parakeet": return pkCache.contains { $0.name.contains(m.modelId) }
+            case "fluidaudio": return false  // FluidAudio owns its cache; not introspected
             default: return whisperNames.contains(m.modelId)
             }
         }
@@ -99,10 +104,13 @@ struct ModelsList: ParsableCommand {
             return config.engine == m.engine && config.model == m.modelId
         }
 
+        func languages(_ m: DownloadableModel) -> String {
+            if m.engine == "fluidaudio" { return "speaker pipeline" }
+            return m.isEnglishOnly ? "english-only" : "multilingual"
+        }
         let entries = ModelCatalog.available().map {
             AvailableModel(
-                name: $0.name, engine: $0.engine,
-                languages: $0.isEnglishOnly ? "english-only" : "multilingual",
+                name: $0.name, engine: $0.engine, languages: languages($0),
                 installed: installed($0), current: current($0))
         }
         if json {
@@ -118,16 +126,20 @@ struct ModelsList: ParsableCommand {
         print("(whisper: any ggml name from ggerganov/whisper.cpp also works)")
     }
 
-    /// Notes the active model when it lives outside ~/.aural/models (so no listed
-    /// row carries the `*`), so `*` never silently goes missing.
-    private func printCurrentOutsideNote(models: [LocalModel]) {
-        guard let current = ModelRegistry.currentModelPath(),
-            !models.contains(where: { $0.current })
-        else { return }
-        print("\ncurrent model: \(current)")
-        print(
-            "(outside \(ModelRegistry.modelsDirectory.path); "
-                + "set via $AURAL_WHISPER_MODEL or aural config)")
+    /// Clarifies the active default when no listed row carries `*`: either a
+    /// whisper model resolved outside ~/.aural/models, or no default configured.
+    private func printCurrentNote(models: [LocalModel]) {
+        guard !models.contains(where: { $0.current }) else { return }
+        if let current = ModelRegistry.currentModelPath() {
+            print("\ncurrent model: \(current)")
+            print(
+                "(outside \(ModelRegistry.modelsDirectory.path); "
+                    + "set via $AURAL_WHISPER_MODEL or aural config)")
+            return
+        }
+        print("\nno default model set — pass --model, or configure one:")
+        print("  aural config set engine <whisper|apple|whisperkit|parakeet>")
+        print("  aural config set model <name>")
     }
 }
 
@@ -160,10 +172,14 @@ struct ModelsDownload: ParsableCommand {
             try ModelDownloader.download(spec: spec, force: force)
 
             var config = Configuration.load()
+            // fluidaudio diarizer/vad are speaker-pipeline helpers, not a
+            // transcription engine, so they are never adopted as the default.
             let adopt =
-                spec.engine == "whisper"
-                ? ModelDownloader.shouldSetDefault(explicit: makeDefault, existing: config.model)
-                : makeDefault
+                spec.engine == "fluidaudio"
+                ? false
+                : spec.engine == "whisper"
+                    ? ModelDownloader.shouldSetDefault(explicit: makeDefault, existing: config.model)
+                    : makeDefault
             if adopt {
                 config.model = spec.modelId
                 if spec.engine != "whisper" { config.engine = spec.engine }
@@ -189,6 +205,11 @@ enum ModelDownloader {
         switch spec.engine {
         case "whisperkit": try WhisperKitBackend.download(variant: spec.modelId)
         case "parakeet": try ParakeetBackend.download(version: spec.modelId)
+        case "fluidaudio":
+            switch spec.modelId {
+            case "vad": try FluidVadClassifier.downloadModel()
+            default: try SpeakerDiarizer.download()
+            }
         default: try downloadGGML(name: spec.modelId, force: force)
         }
     }

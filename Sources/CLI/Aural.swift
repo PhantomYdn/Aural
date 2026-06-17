@@ -175,6 +175,43 @@ struct Aural: ParsableCommand {
         """)
     var translate: Bool?
 
+    // MARK: Speaker recognition (PRD §6.7)
+
+    @Flag(name: [.customLong("speakers"), .customLong("diarize")], help: """
+        Label transcript segments by speaker: by capture source ("You" = mic, \
+        "Others" = system) and/or acoustic diarization ("Speaker N"). Acoustic \
+        diarization needs Apple Silicon; source attribution works anywhere.
+        """)
+    var speakers = false
+
+    @Option(name: .customLong("speaker-mode"), help: ArgumentHelp(
+        "With --speakers: auto (source + diarization), source (mic vs system), "
+            + "or acoustic (diarize one stream).",
+        valueName: "auto|source|acoustic"))
+    var speakerMode: SpeakerMode = .auto
+
+    @Option(name: .customLong("speaker-labels"), help: ArgumentHelp(
+        "With --speakers: rename the two source labels (default 'You,Others').",
+        valueName: "you,others"))
+    var speakerLabels: String?
+
+    @Option(name: .customLong("diarize-engine"), help: ArgumentHelp(
+        "Acoustic diarizer: auto (default: streaming live / offline batch), streaming "
+            + "(real-time live), or offline (accurate, diarized at end of capture).",
+        valueName: "auto|streaming|offline"))
+    var diarizeEngine: DiarizeEngine = .auto
+
+    @Option(name: .customLong("max-speakers"), help: ArgumentHelp(
+        "With acoustic diarization: cap the number of distinct speakers.",
+        valueName: "n"))
+    var maxSpeakers: Int?
+
+    @Option(name: .customLong("speaker-threshold"), help: ArgumentHelp(
+        "Acoustic clustering sensitivity (0–1; default ~0.7). Lower splits speakers "
+            + "more readily, higher merges them.",
+        valueName: "0..1"))
+    var speakerThreshold: Double?
+
     // MARK: Advanced
 
     @Flag(name: .customLong("raw"), help: """
@@ -319,6 +356,47 @@ struct Aural: ParsableCommand {
         if let silenceThreshold, silenceThreshold >= 0 {
             throw ValidationError("--silence-threshold must be negative (dBFS).")
         }
+
+        // Speaker recognition. The label backends land in Phase 8.3/8.4; here
+        // we validate the flag surface so it's stable.
+        if let maxSpeakers, maxSpeakers < 1 {
+            throw ValidationError("--max-speakers must be a positive integer.")
+        }
+        if let speakerThreshold, !(speakerThreshold > 0 && speakerThreshold <= 1) {
+            throw ValidationError("--speaker-threshold must be between 0 and 1.")
+        }
+        if !speakers {
+            if speakerMode != .auto {
+                throw ValidationError("--speaker-mode requires --speakers.")
+            }
+            if speakerLabels != nil {
+                throw ValidationError("--speaker-labels requires --speakers.")
+            }
+            if diarizeEngine != .auto {
+                throw ValidationError("--diarize-engine requires --speakers.")
+            }
+            if maxSpeakers != nil {
+                throw ValidationError("--max-speakers requires --speakers.")
+            }
+            if speakerThreshold != nil {
+                throw ValidationError("--speaker-threshold requires --speakers.")
+            }
+        } else {
+            if let speakerLabels {
+                let parts = speakerLabels.split(separator: ",", omittingEmptySubsequences: false)
+                    .map { $0.trimmingCharacters(in: .whitespaces) }
+                if parts.count != 2 || parts.contains(where: \.isEmpty) {
+                    throw ValidationError(
+                        "--speaker-labels needs two comma-separated names, e.g. 'You,Others'.")
+                }
+            }
+            if speakerMode == .source && !(mix && tapMode) {
+                throw ValidationError("""
+                    --speaker-mode source attributes the mic vs the call, so it needs two \
+                    sources: combine --mix with --system/--app/--exclude-app.
+                    """)
+            }
+        }
     }
 
     /// Capture backend from --capture-backend, else $AURAL_CAPTURE, else "auto".
@@ -419,6 +497,10 @@ struct Aural: ParsableCommand {
             }
         }
 
+        // Resolve speaker labeling up front (downgrading to source-only on Intel
+        // where acoustic diarization can't run) so it's settled before capture.
+        let speakerPlan = resolveLivePlan()
+
         // Fail fast on an unusable transcription engine before touching audio
         // permissions or starting capture: whisper resolves its binary+model
         // (and warns on a .en/language mismatch); apple checks Speech
@@ -444,6 +526,42 @@ struct Aural: ParsableCommand {
                 audioDest, format: format, metadata: metadata,
                 silenceThreshold: settings.silenceThreshold))
         }
+
+        // Speaker labeling (PRD §6.7): dispatch on the resolved plan.
+        switch speakerPlan {
+        case .none:
+            break  // fall through to the plain single-stream path below
+        case .sourceOnly(let labels):
+            try runSourceAttributedLive(
+                outputs: outputs, settings: settings, captureEngine: captureEngine,
+                session: session, format: format, mixedSinks: sinks, labels: labels,
+                systemResolver: nil)
+            return
+        case .sourceDiarized(let labels, .streaming):
+            let resolver = try makeStreamingResolver(settings: settings)
+            try runSourceAttributedLive(
+                outputs: outputs, settings: settings, captureEngine: captureEngine,
+                session: session, format: format, mixedSinks: sinks, labels: labels,
+                systemResolver: resolver)
+            return
+        case .singleDiarized(.streaming):
+            let resolver = try makeStreamingResolver(settings: settings)
+            try runSingleDiarizedLive(
+                outputs: outputs, settings: settings, captureEngine: captureEngine,
+                session: session, format: format, mixedSinks: sinks, resolver: resolver)
+            return
+        case .sourceDiarized(let labels, .offline):
+            try runOfflineLive(
+                outputs: outputs, settings: settings, captureEngine: captureEngine,
+                session: session, format: format, mixedSinks: sinks, labels: labels)
+            return
+        case .singleDiarized(.offline):
+            try runOfflineLive(
+                outputs: outputs, settings: settings, captureEngine: captureEngine,
+                session: session, format: format, mixedSinks: sinks, labels: nil)
+            return
+        }
+
         var liveTranscriber: LiveTranscriber?
         if let transcriptDest = outputs.transcript {
             let transcriber = try LiveTranscriber(
@@ -469,6 +587,191 @@ struct Aural: ParsableCommand {
 
         // Surface any engine error from the live segments (exit-code-mapped).
         try liveTranscriber?.rethrowErrors()
+    }
+
+    /// Resolves how `--speakers` labels live capture (PRD §6.7). `--speaker-mode
+    /// source` is the deterministic You/Others split; `auto`/`acoustic` add
+    /// acoustic diarization of the system (or single) stream (`Speaker N`), in
+    /// real time (`--diarize-engine streaming`, default) or as an end-of-capture
+    /// offline pass (`--diarize-engine offline`). On Intel (no CoreML diarizer)
+    /// diarized modes downgrade to source-only with a notice.
+    private func resolveLivePlan() -> LivePlan {
+        guard speakers else { return .none }
+        let twoSources = mix && (captureSystem || !apps.isEmpty || !excludeApps.isEmpty)
+        let labels = SpeakerLabels.parse(speakerLabels)
+        let mode: DiarizeMode = diarizeEngine == .offline ? .offline : .streaming
+
+        if speakerMode == .source {
+            return .sourceOnly(labels)  // two-source requirement validated
+        }
+        // auto / acoustic want diarization; fall back to source-only on Intel.
+        if !Platform.isAppleSilicon {
+            if twoSources {
+                Log.notice(
+                    "acoustic diarization needs Apple Silicon; using deterministic \(labels.you)/\(labels.others) attribution.")
+                return .sourceOnly(labels)
+            }
+            Log.notice("acoustic diarization needs Apple Silicon; labeling disabled for this single source.")
+            return .none
+        }
+        return twoSources ? .sourceDiarized(labels, mode) : .singleDiarized(mode)
+    }
+
+    /// Loads the streaming diarizer for the system/single stream, or returns nil
+    /// (with a notice) if it can't load — callers fall back to a fixed label.
+    private func makeStreamingResolver(settings: ResolvedSettings) throws -> LiveSpeakerResolver? {
+        do {
+            let diarizer = try StreamingDiarizer.make(maxSpeakers: maxSpeakers, threshold: speakerThreshold)
+            return ClusteringSpeakerResolver(diarizer)
+        } catch let error as AuralError {
+            Log.notice("acoustic diarization unavailable (\(error.message)); falling back to a single label.")
+            return nil
+        }
+    }
+
+    /// Two-source live attribution: one shared transcript + engine; a mic
+    /// transcriber labeled `you`, and a system transcriber labeled `others` —
+    /// or, when `systemResolver` is given, diarized into `Speaker 1..N`.
+    private func runSourceAttributedLive(
+        outputs: ResolvedOutputs, settings: ResolvedSettings, captureEngine: CaptureEngine,
+        session: CaptureSession, format: PCMFormat, mixedSinks: [AudioSink], labels: SpeakerLabels,
+        systemResolver: LiveSpeakerResolver?
+    ) throws {
+        guard let transcriptDest = outputs.transcript else {
+            throw AuralError.usage("""
+                --speakers labels a transcript; name one with -t FILE (or omit -a to \
+                transcribe to stdout).
+                """)
+        }
+
+        let writer = try LiveTranscriptWriter(
+            destination: transcriptDest, format: transcriptFormat(for: transcriptDest))
+        let base = try TranscriptionEngine.makeLive(
+            engineName: settings.engine, modelFlag: model, language: settings.language,
+            quiet: !Log.isVerbose)
+        let backend = SerializedBackend(base)
+
+        let micTranscriber = LiveTranscriber(
+            sharedWriter: writer, sharedBackend: backend, speaker: labels.you,
+            language: settings.language, translate: settings.translate,
+            captureFormat: format, silenceThresholdDBFS: settings.silenceThreshold)
+        let systemTranscriber = LiveTranscriber(
+            sharedWriter: writer, sharedBackend: backend, speaker: labels.others,
+            resolver: systemResolver, language: settings.language, translate: settings.translate,
+            captureFormat: format, silenceThresholdDBFS: settings.silenceThreshold)
+
+        let othersDesc = systemResolver != nil ? "Speaker N" : labels.others
+        if outputs.audio == nil && duration == nil {
+            Log.notice(
+                "listening (speakers: \(labels.you) + \(othersDesc)) — press Ctrl+C to stop")
+        }
+        Log.verbose("destination: \(transcriptDest.label) [\(labels.you)/\(othersDesc)]")
+
+        try captureEngine.run(
+            session: session, format: format, into: mixedSinks,
+            duration: duration, warnOnSilence: captureSystem,
+            sourceSinks: [(.microphone, micTranscriber), (.system, systemTranscriber)])
+
+        try? writer.close()
+        backend.shutdown()
+        try micTranscriber.rethrowErrors()
+        try systemTranscriber.rethrowErrors()
+    }
+
+    /// Single-stream live acoustic diarization: one transcriber whose segments
+    /// are labeled `Speaker 1..N` by the streaming diarizer.
+    private func runSingleDiarizedLive(
+        outputs: ResolvedOutputs, settings: ResolvedSettings, captureEngine: CaptureEngine,
+        session: CaptureSession, format: PCMFormat, mixedSinks: [AudioSink],
+        resolver: LiveSpeakerResolver?
+    ) throws {
+        guard let transcriptDest = outputs.transcript else {
+            throw AuralError.usage(
+                "--speakers labels a transcript; name one with -t FILE (or omit -a).")
+        }
+        let writer = try LiveTranscriptWriter(
+            destination: transcriptDest, format: transcriptFormat(for: transcriptDest))
+        let base = try TranscriptionEngine.makeLive(
+            engineName: settings.engine, modelFlag: model, language: settings.language,
+            quiet: !Log.isVerbose)
+        let backend = SerializedBackend(base)
+        let transcriber = LiveTranscriber(
+            backend: backend, writer: writer, ownsBackend: false, ownsWriter: false,
+            speaker: nil, language: settings.language, translate: settings.translate,
+            captureFormat: format, silenceThresholdDBFS: settings.silenceThreshold,
+            labelName: "live transcript [Speaker N]", resolver: resolver)
+
+        if outputs.audio == nil && duration == nil {
+            Log.notice("listening (speakers: Speaker N) — press Ctrl+C to stop")
+        }
+
+        try captureEngine.run(
+            session: session, format: format, into: mixedSinks + [transcriber],
+            duration: duration, warnOnSilence: captureSystem)
+        try? writer.close()
+        backend.shutdown()
+        try transcriber.rethrowErrors()
+    }
+
+    /// Offline-live (`--diarize-engine offline`): record the stream(s) to temp
+    /// WAVs during capture, then run the accurate offline diarizer at stop. With
+    /// `labels` (two sources) the mic track is forced to `you` and merged with
+    /// the diarized system track; otherwise the single stream is diarized.
+    private func runOfflineLive(
+        outputs: ResolvedOutputs, settings: ResolvedSettings, captureEngine: CaptureEngine,
+        session: CaptureSession, format: PCMFormat, mixedSinks: [AudioSink], labels: SpeakerLabels?
+    ) throws {
+        guard let transcriptDest = outputs.transcript else {
+            throw AuralError.usage(
+                "--speakers labels a transcript; name one with -t FILE (or omit -a).")
+        }
+        let work = FileManager.default.temporaryDirectory
+            .appendingPathComponent("aural-offline-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: work) }
+
+        func wavSink(_ name: String) throws -> AudioSink {
+            try CaptureEngine.makeFileSink(
+                path: work.appendingPathComponent(name).path, fileFormat: .wav, format: format)
+        }
+
+        Log.notice("recording for offline diarization — press Ctrl+C to stop (transcript at end)")
+        let micPath = work.appendingPathComponent("mic.wav").path
+        let systemPath = work.appendingPathComponent("system.wav").path
+
+        if labels != nil {
+            try captureEngine.run(
+                session: session, format: format, into: mixedSinks,
+                duration: duration, warnOnSilence: captureSystem,
+                sourceSinks: [(.microphone, try wavSink("mic.wav")), (.system, try wavSink("system.wav"))])
+        } else {
+            try captureEngine.run(
+                session: session, format: format, into: mixedSinks + [try wavSink("system.wav")],
+                duration: duration, warnOnSilence: captureSystem)
+        }
+
+        Log.notice("diarizing the recording…")
+        var cueLists: [[TranscriptCue]] = []
+        if FileManager.default.fileExists(atPath: systemPath) {
+            cueLists.append(try BatchDiarization.diarizeToCues(
+                audioPath: systemPath, engineName: settings.engine, modelFlag: model,
+                language: settings.language, translate: settings.translate,
+                maxSpeakers: maxSpeakers, threshold: speakerThreshold))
+        }
+        if let labels, FileManager.default.fileExists(atPath: micPath) {
+            cueLists.append(try BatchDiarization.diarizeToCues(
+                audioPath: micPath, engineName: settings.engine, modelFlag: model,
+                language: settings.language, translate: settings.translate,
+                maxSpeakers: 1, threshold: speakerThreshold, relabel: labels.you))
+        }
+        let cues = BatchDiarization.merge(cueLists)
+        let format = transcriptFormat(for: transcriptDest)
+        let rendered = TranscriptFormatting.render(
+            cues: cues, fullText: cues.map(\.text).joined(separator: " "), format: format)
+        try TranscribeEngine(
+            engineName: settings.engine, modelFlag: model, language: settings.language,
+            translate: settings.translate, format: format
+        ).write(rendered, to: transcriptDest)
     }
 
     // MARK: File input (transcode and/or transcribe)
@@ -497,9 +800,41 @@ struct Aural: ParsableCommand {
             try convert(sourcePath: sourcePath, to: audioDest, settings: settings)
         }
         if let transcriptDest = outputs.transcript {
-            try transcribeAndWrite(
-                audioPath: sourcePath, to: transcriptDest, settings: settings)
+            if speakers {
+                try runBatchDiarization(
+                    audioPath: sourcePath, to: transcriptDest, settings: settings)
+            } else {
+                try transcribeAndWrite(
+                    audioPath: sourcePath, to: transcriptDest, settings: settings)
+            }
+        } else if speakers {
+            throw AuralError.usage(
+                "--speakers labels a transcript; name one with -t FILE (or omit -a).")
         }
+    }
+
+    /// Batch acoustic diarization (`-i FILE --speakers`): diarize, transcribe
+    /// each speaker span, and write a labeled transcript (PRD §6.7b).
+    private func runBatchDiarization(
+        audioPath: String, to destination: TranscriptDestination, settings: ResolvedSettings
+    ) throws {
+        // Fail fast on an unusable engine before loading the diarizer model.
+        try TranscriptionEngine.preflight(
+            engineName: settings.engine, modelFlag: model,
+            language: settings.language, translate: settings.translate)
+        if diarizeEngine == .streaming {
+            Log.notice(
+                "note: --diarize-engine streaming applies to live capture; using the offline diarizer for files.")
+        }
+        let format = transcriptFormat(for: destination)
+        let rendered = try BatchDiarization.diarizeAndTranscribe(
+            audioPath: audioPath, engineName: settings.engine, modelFlag: model,
+            language: settings.language, translate: settings.translate,
+            maxSpeakers: maxSpeakers, threshold: speakerThreshold, format: format)
+        try TranscribeEngine(
+            engineName: settings.engine, modelFlag: model, language: settings.language,
+            translate: settings.translate, format: format
+        ).write(rendered, to: destination)
     }
 
     /// Transcodes `sourcePath` into the given audio destination, defaulting

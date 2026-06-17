@@ -61,6 +61,16 @@ struct RootParsingTests {
         ["-e", "bogus"],                        // unknown engine
         ["-e", "apple", "--translate"],         // apple cannot translate
         ["--system", "--capture-backend", "bogus", "-a", "x.wav"],  // bad backend
+        ["--speaker-mode", "source"],          // mode needs --speakers
+        ["--speaker-labels", "You,Others"],    // labels need --speakers
+        ["--speakers", "--speaker-mode", "source"],  // source needs two sources
+        ["--speakers", "--speaker-labels", "a,b,c"],  // labels must be a pair
+        ["--max-speakers", "2"],                      // needs --speakers
+        ["--diarize-engine", "offline"],              // needs --speakers
+        ["--speakers", "--max-speakers", "0"],        // must be positive
+        ["--speaker-threshold", "0.5"],               // needs --speakers
+        ["--speakers", "--speaker-threshold", "0"],   // out of (0,1]
+        ["--speakers", "--speaker-threshold", "1.5"],  // out of (0,1]
     ])
     func rejectsInvalidCombinations(_ arguments: [String]) {
         #expect(throws: (any Error).self) {
@@ -88,6 +98,14 @@ struct RootParsingTests {
         ["--no-translate", "-i", "x.wav"],      // explicit opt-out
         ["-e", "whisperkit", "--translate"],    // known engine, capable (impl. pending)
         ["-e", "apple", "-i", "x.wav"],         // known engine parses (run-time unavailable)
+        ["--speakers"],                          // opt-in (run-time: planned)
+        ["--diarize"],                           // alias of --speakers
+        ["--speakers", "--speaker-labels", "Me,Them"],
+        ["--system", "--mix", "--speakers", "--speaker-mode", "source"],
+        ["--speakers", "--max-speakers", "3"],
+        ["--speakers", "--speaker-threshold", "0.5"],
+        ["-i", "x.wav", "--speakers"],                          // batch diarization
+        ["-i", "x.wav", "--speakers", "--speaker-mode", "acoustic", "--diarize-engine", "offline"],
     ])
     func acceptsValidCombinations(_ arguments: [String]) throws {
         _ = try Aural.parse(arguments)
@@ -536,6 +554,9 @@ struct LiveTranscriptWriterTests {
 @Suite("Live transcription (integration)")
 struct LiveTranscriptionIntegrationTests {
     @Test func liveSegmentTranscribesSpeechToFile() throws {
+        // Exercise the amplitude segmenter deterministically (no VAD model
+        // download); VAD has its own gated test below.
+        setenv("AURAL_VAD", "0", 1)
         guard WhisperEngine.discover() != nil,
             (try? WhisperEngine.resolveModel(flag: nil)) != nil
         else { return }  // no engine/model -> skip
@@ -591,6 +612,397 @@ struct LiveTranscriptionIntegrationTests {
             return process.terminationStatus == 0
         } catch {
             return false
+        }
+    }
+}
+
+/// Thread-safe segment collector: `VadSegmenter` emits from its consumer task,
+/// the test reads after `finish()` (a semaphore barrier).
+private final class Captured: @unchecked Sendable {
+    private let lock = NSLock()
+    private var items: [(Int, Double, Double)] = []
+    func append(_ item: (Int, Double, Double)) {
+        lock.lock(); items.append(item); lock.unlock()
+    }
+    func all() -> [(Int, Double, Double)] {
+        lock.lock(); defer { lock.unlock() }; return items
+    }
+}
+
+/// Deterministic stand-in for the VAD model: a window is "speech" when its peak
+/// exceeds `threshold`; emits speechStart/End on transitions with the absolute
+/// sample index. Lets `VadSegmenter`'s boundary logic be tested without CoreML.
+private final class ScriptedVAD: VoiceActivityStream, @unchecked Sendable {
+    let windowSamples: Int
+    private let threshold: Float
+    private var processed = 0
+    private var active = false
+
+    init(windowSamples: Int, threshold: Float = 0.1) {
+        self.windowSamples = windowSamples
+        self.threshold = threshold
+    }
+
+    func process(_ window: [Float]) async throws -> VoiceActivityEvent? {
+        let start = processed
+        processed += window.count
+        let peak = window.reduce(Float(0)) { Swift.max($0, Swift.abs($1)) }
+        let speech = peak > threshold
+        if speech && !active {
+            active = true
+            return .speechStart(sample: start)
+        }
+        if !speech && active {
+            active = false
+            return .speechEnd(sample: start)
+        }
+        return nil
+    }
+}
+
+@Suite("VAD segmentation")
+struct VadSegmenterTests {
+    // 16 kHz mono 16-bit: byteRate 32000; 1600-sample (0.1 s) windows.
+    private let format = PCMFormat(sampleRate: 16000, bitsPerSample: 16, channels: 1)
+    private let windowSamples = 1600
+
+    private func loud(_ seconds: Double) -> Data {
+        let samples = Int(seconds * 16000)
+        var data = Data(capacity: samples * 2)
+        for i in 0..<samples {
+            withUnsafeBytes(of: Int16(i % 2 == 0 ? 16000 : -16000).littleEndian) {
+                data.append(contentsOf: $0)
+            }
+        }
+        return data
+    }
+    private func quiet(_ seconds: Double) -> Data { Data(count: Int(seconds * 16000) * 2) }
+
+    private func makeSegmenter(maxWindow: Double = 2.0, minSegment: Double = 0.2)
+        -> (VadSegmenter, Captured)
+    {
+        let captured = Captured()
+        let seg = VadSegmenter(
+            format: format, classifier: ScriptedVAD(windowSamples: windowSamples),
+            resample: { samples, _ in samples }, maxWindowSeconds: maxWindow,
+            minSegmentSeconds: minSegment)
+        seg.onSegment = { data, start, end in captured.append((data.count, start, end)) }
+        return (seg, captured)
+    }
+
+    @Test func speechThenPauseEmitsOneSegment() {
+        let (seg, captured) = makeSegmenter()
+        seg.consume(loud(0.5))
+        seg.consume(quiet(0.2))
+        seg.finish()
+        let result = captured.all()
+        #expect(result.count == 1)
+        #expect(result[0].0 == 16000)              // 0.5 s of speech (bytes)
+        #expect(abs(result[0].1 - 0.0) < 1e-6)     // start
+        #expect(abs(result[0].2 - 0.5) < 1e-6)     // end
+    }
+
+    @Test func continuousSpeechCutAtMaxWindow() {
+        let (seg, captured) = makeSegmenter(maxWindow: 0.4)
+        seg.consume(loud(0.7))  // no pause: forced cut at 0.4 s, 0.3 s tail
+        seg.finish()
+        let result = captured.all()
+        #expect(result.count == 2)
+        #expect(result[0].0 == 12800)  // forced cut at the 0.4 s window cap
+    }
+
+    @Test func pureSilenceEmitsNothing() {
+        let (seg, captured) = makeSegmenter()
+        seg.consume(quiet(0.5))
+        seg.finish()
+        #expect(captured.all().isEmpty)
+    }
+
+    @Test func finishFlushesTrailingSpeech() {
+        let (seg, captured) = makeSegmenter()
+        seg.consume(loud(0.25))  // no trailing pause
+        seg.finish()
+        let result = captured.all()
+        #expect(result.count == 1)
+        #expect(result[0].0 == 8000)
+        #expect(abs(result[0].2 - 0.25) < 1e-6)
+    }
+
+    @Test func shortBlipBelowMinSegmentDropped() {
+        let (seg, captured) = makeSegmenter(minSegment: 0.3)
+        seg.consume(loud(0.1))   // one 0.1 s speech window
+        seg.consume(quiet(0.2))  // silence closes the turn
+        seg.finish()
+        #expect(captured.all().isEmpty)  // 0.1 s < 0.3 s min -> dropped
+    }
+}
+
+@Suite("Speaker labels")
+struct SpeakerLabelTests {
+    private let cues = [
+        TranscriptCue(start: 0, end: 1, text: "hello", speaker: "You"),
+        TranscriptCue(start: 1, end: 2, text: "hi there", speaker: "Speaker 1"),
+    ]
+
+    @Test func srtPrefixesSpeaker() {
+        let out = TranscriptFormatting.render(
+            cues: cues, fullText: "hello hi there", format: .srt)
+        #expect(out.contains("[You] hello"))
+        #expect(out.contains("[Speaker 1] hi there"))
+    }
+
+    @Test func txtPrefixesSpeaker() {
+        let out = TranscriptFormatting.render(
+            cues: cues, fullText: "hello hi there", format: .txt)
+        #expect(out == "You: hello\nSpeaker 1: hi there\n")
+    }
+
+    @Test func jsonIncludesSpeaker() throws {
+        let out = TranscriptFormatting.render(cues: cues, fullText: "x", format: .json)
+        let array = try JSONSerialization.jsonObject(with: Data(out.utf8)) as? [[String: Any]]
+        #expect(array?.first?["speaker"] as? String == "You")
+    }
+
+    @Test func absentSpeakerOmittedFromJSON() throws {
+        let plain = [TranscriptCue(start: 0, end: 1, text: "hello")]
+        let out = TranscriptFormatting.render(cues: plain, fullText: "hello", format: .json)
+        #expect(!out.contains("speaker"))
+    }
+
+    @Test func absentSpeakerKeepsPlainText() {
+        let plain = [TranscriptCue(start: 0, end: 1, text: "hello world")]
+        let out = TranscriptFormatting.render(cues: plain, fullText: "hello world", format: .txt)
+        #expect(out == "hello world\n")
+    }
+
+    @Test func liveJsonLineIncludesSpeakerOnlyWhenPresent() {
+        let withSpeaker = LiveTranscriptWriter.jsonLine(
+            start: 0, end: 1, text: "hi", speaker: "You")
+        #expect(withSpeaker.contains("\"speaker\":\"You\""))
+        let without = LiveTranscriptWriter.jsonLine(start: 0, end: 1, text: "hi")
+        #expect(!without.contains("speaker"))
+    }
+
+    @Test func liveSrtPrefixesSpeaker() throws {
+        let path = FileManager.default.temporaryDirectory
+            .appendingPathComponent("aural-spk-\(UUID().uuidString).srt").path
+        defer { try? FileManager.default.removeItem(atPath: path) }
+        let writer = try LiveTranscriptWriter(destination: .file(path), format: .srt)
+        try writer.append(text: "hello", start: 0, end: 1, speaker: "You")
+        try writer.close()
+        let contents = try String(contentsOfFile: path, encoding: .utf8)
+        #expect(contents.contains("[You] hello"))
+    }
+}
+
+/// Stub backend that returns a fixed transcript regardless of input — for
+/// exercising the transcribe→write→label path offline.
+private final class FakeBackend: TranscriptionBackend, @unchecked Sendable {
+    let capabilities = EngineCapabilities(autoDetect: true, translate: true, usesModelFile: false)
+    var label: String { "fake" }
+    private let text: String
+    init(_ text: String) { self.text = text }
+    func transcribe(
+        wavFile: URL, language: String?, translate: Bool, format: TranscriptOutputFormat
+    ) throws -> String { text }
+    func shutdown() {}
+}
+
+@Suite("Source attribution labeling")
+struct SourceAttributionTests {
+    private let format = PCMFormat(sampleRate: 16000, bitsPerSample: 16, channels: 1)
+
+    private func loud(_ seconds: Double) -> Data {
+        let samples = Int(seconds * 16000)
+        var data = Data(capacity: samples * 2)
+        for i in 0..<samples {
+            withUnsafeBytes(of: Int16(i % 2 == 0 ? 16000 : -16000).littleEndian) {
+                data.append(contentsOf: $0)
+            }
+        }
+        return data
+    }
+    private func quiet(_ seconds: Double) -> Data { Data(count: Int(seconds * 16000) * 2) }
+
+    @Test func twoSourcesShareWriterAndTagSpeakers() throws {
+        setenv("AURAL_VAD", "0", 1)  // amplitude segmenter (deterministic, offline)
+        let path = FileManager.default.temporaryDirectory
+            .appendingPathComponent("aural-srcattr-\(UUID().uuidString).txt").path
+        defer { try? FileManager.default.removeItem(atPath: path) }
+
+        let writer = try LiveTranscriptWriter(destination: .file(path), format: .txt)
+        let backend = SerializedBackend(FakeBackend("hello"))
+        func makeSource(_ speaker: String) -> LiveTranscriber {
+            LiveTranscriber(
+                sharedWriter: writer, sharedBackend: backend, speaker: speaker,
+                language: nil, translate: false, captureFormat: format,
+                silenceThresholdDBFS: -50, pauseSeconds: 0.5, maxWindowSeconds: 2,
+                minSegmentSeconds: 0.2)
+        }
+        let you = makeSource("You")
+        let others = makeSource("Others")
+
+        // One speech turn on each source.
+        try you.write(loud(0.5)); try you.write(quiet(0.5)); try you.finalize()
+        try others.write(loud(0.5)); try others.write(quiet(0.5)); try others.finalize()
+        try you.rethrowErrors(); try others.rethrowErrors()
+        try writer.close()
+        backend.shutdown()
+
+        let contents = try String(contentsOfFile: path, encoding: .utf8)
+        #expect(contents.contains("You: hello"))
+        #expect(contents.contains("Others: hello"))
+    }
+}
+
+@Suite("Diarization labeling")
+struct SpeakerLabelingTests {
+    @Test func numbersByFirstAppearanceAndMerges() {
+        let raw: [(start: Double, end: Double, id: String)] = [
+            (0, 1, "A"), (1, 2, "B"), (2, 3, "A"), (3.2, 4, "A"),
+        ]
+        let out = SpeakerLabeling.normalize(raw)
+        #expect(out == [
+            DiarizedSegment(start: 0, end: 1, speaker: "Speaker 1"),
+            DiarizedSegment(start: 1, end: 2, speaker: "Speaker 2"),
+            // A's two spans (gap 0.2 s) merge into one Speaker 1 cue [2, 4].
+            DiarizedSegment(start: 2, end: 4, speaker: "Speaker 1"),
+        ])
+    }
+
+    @Test func dropsZeroLengthAndSorts() {
+        let raw: [(start: Double, end: Double, id: String)] = [
+            (2, 3, "X"), (0, 0, "Y"), (0, 1, "Y"),
+        ]
+        let out = SpeakerLabeling.normalize(raw)
+        #expect(out.map(\.speaker) == ["Speaker 1", "Speaker 2"])  // Y first (sorted), zero-length dropped
+        #expect(out[0].start == 0 && out[1].start == 2)
+    }
+}
+
+@Suite("Diarizer model catalog")
+struct DiarizerCatalogTests {
+    @Test func parsesFluidAudioTags() {
+        #expect(ModelCatalog.parse("fluidaudio:diarizer").engine == "fluidaudio")
+        #expect(ModelCatalog.parse("fluidaudio:diarizer").modelId == "diarizer")
+        #expect(ModelCatalog.parse("fluidaudio:vad").modelId == "vad")
+        #expect(ModelCatalog.parse("fluidaudio").modelId == "diarizer")  // bare -> diarizer
+        let names = ModelCatalog.available().map(\.name)
+        #expect(names.contains("fluidaudio:diarizer"))
+        #expect(names.contains("fluidaudio:vad"))
+    }
+}
+
+/// Gated: loads the real diarizer model and runs it. Only when
+/// AURAL_TEST_DIARIZE=1 and on Apple Silicon (downloads CoreML on first use).
+@Suite("Diarization (integration)")
+struct DiarizationIntegrationTests {
+    @Test func loadsAndRunsOffline() throws {
+        guard ProcessInfo.processInfo.environment["AURAL_TEST_DIARIZE"] == "1",
+            Platform.isAppleSilicon
+        else { return }
+        let diarizer = try SpeakerDiarizer.makeOffline(maxSpeakers: nil, threshold: nil)
+        var samples = [Float](repeating: 0, count: 16000 * 12)
+        for i in 0..<samples.count {
+            samples[i] = 0.3 * sin(2 * .pi * 200 * Float(i) / 16000)
+        }
+        _ = try diarizer.diarize(samples)  // must run without throwing
+    }
+}
+
+/// Always returns a fixed label, to test that an acoustic resolver overrides
+/// the transcriber's fixed speaker.
+private final class FixedResolver: LiveSpeakerResolver, @unchecked Sendable {
+    private let value: String
+    init(_ value: String) { self.value = value }
+    func label(forWav wav: URL, durationSeconds: Double) -> String? { value }
+}
+
+@Suite("Streaming diarization labeling")
+struct StreamingDiarizationTests {
+    private let format = PCMFormat(sampleRate: 16000, bitsPerSample: 16, channels: 1)
+    private func loud(_ seconds: Double) -> Data {
+        let samples = Int(seconds * 16000)
+        var data = Data(capacity: samples * 2)
+        for i in 0..<samples {
+            withUnsafeBytes(of: Int16(i % 2 == 0 ? 16000 : -16000).littleEndian) {
+                data.append(contentsOf: $0)
+            }
+        }
+        return data
+    }
+    private func quiet(_ seconds: Double) -> Data { Data(count: Int(seconds * 16000) * 2) }
+
+    @Test func speakerNumberingStableByFirstAppearance() {
+        var numbering = SpeakerNumbering()
+        #expect(numbering.label(for: "a") == "Speaker 1")
+        #expect(numbering.label(for: "b") == "Speaker 2")
+        #expect(numbering.label(for: "a") == "Speaker 1")  // stable across calls
+        #expect(numbering.label(for: "c") == "Speaker 3")
+        #expect(numbering.label(for: "b") == "Speaker 2")
+    }
+
+    @Test func mergeOrdersCuesByStart() {
+        let mic = [
+            TranscriptCue(start: 0, end: 1, text: "x", speaker: "You"),
+            TranscriptCue(start: 4, end: 5, text: "z", speaker: "You"),
+        ]
+        let system = [TranscriptCue(start: 2, end: 3, text: "y", speaker: "Speaker 1")]
+        let merged = BatchDiarization.merge([mic, system])
+        #expect(merged.map(\.start) == [0, 2, 4])
+        #expect(merged.map(\.speaker) == ["You", "Speaker 1", "You"])
+    }
+
+    @Test func resolverOverridesFixedLabel() throws {
+        setenv("AURAL_VAD", "0", 1)
+        let path = FileManager.default.temporaryDirectory
+            .appendingPathComponent("aural-resolve-\(UUID().uuidString).txt").path
+        defer { try? FileManager.default.removeItem(atPath: path) }
+        let writer = try LiveTranscriptWriter(destination: .file(path), format: .txt)
+        let backend = SerializedBackend(FakeBackend("hi"))
+        let transcriber = LiveTranscriber(
+            backend: backend, writer: writer, ownsBackend: false, ownsWriter: false,
+            speaker: "Others", language: nil, translate: false, captureFormat: format,
+            silenceThresholdDBFS: -50, labelName: "t", resolver: FixedResolver("Speaker 2"),
+            pauseSeconds: 0.5, maxWindowSeconds: 2, minSegmentSeconds: 0.2)
+
+        try transcriber.write(loud(0.5)); try transcriber.write(quiet(0.5))
+        try transcriber.finalize(); try transcriber.rethrowErrors()
+        try writer.close()
+
+        let contents = try String(contentsOfFile: path, encoding: .utf8)
+        #expect(contents.contains("Speaker 2: hi"))  // resolver overrode the fixed "Others"
+        #expect(!contents.contains("Others"))
+    }
+}
+
+@Suite("Speaker labels parsing")
+struct SpeakerLabelsParseTests {
+    @Test func defaultsAndOverrides() {
+        #expect(SpeakerLabels.parse(nil).you == "You")
+        #expect(SpeakerLabels.parse(nil).others == "Others")
+        let custom = SpeakerLabels.parse("Me, Them")
+        #expect(custom.you == "Me")
+        #expect(custom.others == "Them")
+        // Malformed -> defaults (validation rejects these before we get here).
+        #expect(SpeakerLabels.parse("solo").you == "You")
+    }
+}
+
+/// Gated check that the real Silero VAD model loads and runs. Runs only when
+/// AURAL_TEST_VAD=1 and on Apple Silicon (downloads CoreML on first use).
+@Suite("VAD (integration)")
+struct VadIntegrationTests {
+    @Test func loadsAndProcessesARealWindow() throws {
+        guard ProcessInfo.processInfo.environment["AURAL_TEST_VAD"] == "1",
+            Platform.isAppleSilicon
+        else { return }
+        let classifier = try FluidVadClassifier.makeLoading(
+            pauseSeconds: 0.7, maxWindowSeconds: 12)
+        let window = [Float](repeating: 0, count: classifier.windowSamples)
+        let box = UncheckedSendableBox(value: classifier)
+        _ = try RunLoopBridge.runBlocking(timeout: 60) {
+            try await box.value.process(window)
         }
     }
 }

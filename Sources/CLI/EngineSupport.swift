@@ -60,11 +60,21 @@ struct UncheckedSendableBox<T>: @unchecked Sendable {
 }
 
 /// One transcript segment with timing, used to render srt/json from an engine
-/// that returns timestamped segments (whisperkit, parakeet).
+/// that returns timestamped segments (whisperkit, parakeet). `speaker` is an
+/// optional label (e.g. "You", "Speaker 1") attached by the speaker pipeline
+/// (PRD §6.7); nil leaves output identical to the no-speaker case.
 struct TranscriptCue {
     let start: Double
     let end: Double
     let text: String
+    let speaker: String?
+
+    init(start: Double, end: Double, text: String, speaker: String? = nil) {
+        self.start = start
+        self.end = end
+        self.text = text
+        self.speaker = speaker
+    }
 }
 
 /// Renders a whole-file transcript in the requested format from an engine's
@@ -75,6 +85,15 @@ enum TranscriptFormatting {
     ) -> String {
         switch format {
         case .txt:
+            // Plain text carries speakers as line prefixes only when present;
+            // otherwise the engine's joined text is returned unchanged.
+            if cues.contains(where: { $0.speaker != nil }) {
+                let lines = cues.map { cue -> String in
+                    let body = cue.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                    return cue.speaker.map { "\($0): \(body)" } ?? body
+                }
+                return lines.joined(separator: "\n") + "\n"
+            }
             return fullText.hasSuffix("\n") ? fullText : fullText + "\n"
         case .srt:
             var out = ""
@@ -82,15 +101,24 @@ enum TranscriptFormatting {
                 out += "\(index + 1)\n"
                 out += "\(LiveTranscriptWriter.srtTimestamp(cue.start)) --> "
                 out += "\(LiveTranscriptWriter.srtTimestamp(cue.end))\n"
-                out += cue.text.trimmingCharacters(in: .whitespaces) + "\n\n"
+                let body = cue.text.trimmingCharacters(in: .whitespaces)
+                out += (cue.speaker.map { "[\($0)] \(body)" } ?? body) + "\n\n"
             }
             return out
         case .json:
-            struct Segment: Encodable { let start: Double; let end: Double; let text: String }
+            // `speaker` is optional: nil omits the key (synthesized
+            // encodeIfPresent), keeping default output byte-identical.
+            struct Segment: Encodable {
+                let start: Double
+                let end: Double
+                let text: String
+                let speaker: String?
+            }
             let segments = cues.map {
                 Segment(
                     start: $0.start, end: $0.end,
-                    text: $0.text.trimmingCharacters(in: .whitespacesAndNewlines))
+                    text: $0.text.trimmingCharacters(in: .whitespacesAndNewlines),
+                    speaker: $0.speaker)
             }
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.prettyPrinted, .withoutEscapingSlashes]

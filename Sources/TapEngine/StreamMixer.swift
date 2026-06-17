@@ -13,13 +13,45 @@ import Foundation
 final class StreamMixer {
     private let tapChannels: Int
     private var scratch: AVAudioPCMBuffer?
+    private var systemScratch: AVAudioPCMBuffer?
+    private var micScratch: AVAudioPCMBuffer?
 
     init(tapChannels: Int) {
         self.tapChannels = max(1, tapChannels)
     }
 
+    /// Mic summed into the tap signal (the `--mix` output).
     func mixedBuffer(
         from inputData: UnsafePointer<AudioBufferList>, tapFormat: AVAudioFormat
+    ) -> AVAudioPCMBuffer? {
+        produce(from: inputData, tapFormat: tapFormat, scratch: &scratch, includeTap: true)
+    }
+
+    /// The tap (system) signal alone, in tap layout — for source attribution.
+    func systemBuffer(
+        from inputData: UnsafePointer<AudioBufferList>, tapFormat: AVAudioFormat
+    ) -> AVAudioPCMBuffer? {
+        produce(
+            from: inputData, tapFormat: tapFormat, scratch: &systemScratch,
+            includeTap: true, includeMic: false)
+    }
+
+    /// The microphone signal alone, upmixed into tap layout — for source attribution.
+    func micBuffer(
+        from inputData: UnsafePointer<AudioBufferList>, tapFormat: AVAudioFormat
+    ) -> AVAudioPCMBuffer? {
+        produce(
+            from: inputData, tapFormat: tapFormat, scratch: &micScratch,
+            includeTap: false, includeMic: true)
+    }
+
+    /// Builds a tap-layout buffer from the aggregate input list. `includeTap`
+    /// seeds it with the tap (system) signal; `includeMic` sums every mic
+    /// sub-device stream (mono channels duplicated across tap channels) with
+    /// clamping. Frame count comes from the tap stream (the last buffer).
+    private func produce(
+        from inputData: UnsafePointer<AudioBufferList>, tapFormat: AVAudioFormat,
+        scratch: inout AVAudioPCMBuffer?, includeTap: Bool, includeMic: Bool = true
     ) -> AVAudioPCMBuffer? {
         let buffers = UnsafeMutableAudioBufferListPointer(
             UnsafeMutablePointer(mutating: inputData))
@@ -31,13 +63,18 @@ final class StreamMixer {
             let tapSamples = tapBuffer.mData?.assumingMemoryBound(to: Float32.self)
         else { return nil }
 
-        guard let output = scratchBuffer(format: tapFormat, capacity: AVAudioFrameCount(frames)),
+        guard let output = Self.reuse(&scratch, format: tapFormat, capacity: AVAudioFrameCount(frames)),
             let outputSamples = output.floatChannelData?[0]  // interleaved
         else { return nil }
         output.frameLength = AVAudioFrameCount(frames)
 
-        // Start from the tap signal.
-        outputSamples.update(from: tapSamples, count: frames * tapChannels)
+        if includeTap {
+            outputSamples.update(from: tapSamples, count: frames * tapChannels)
+        } else {
+            for index in 0..<(frames * tapChannels) { outputSamples[index] = 0 }
+        }
+
+        guard includeMic else { return output }
 
         // Sum every mic stream (all buffers except the last) on top.
         for index in 0..<(buffers.count - 1) {
@@ -60,14 +97,14 @@ final class StreamMixer {
         return output
     }
 
-    private func scratchBuffer(
-        format: AVAudioFormat, capacity: AVAudioFrameCount
+    private static func reuse(
+        _ buffer: inout AVAudioPCMBuffer?, format: AVAudioFormat, capacity: AVAudioFrameCount
     ) -> AVAudioPCMBuffer? {
-        if let scratch, scratch.frameCapacity >= capacity {
-            return scratch
+        if let buffer, buffer.frameCapacity >= capacity {
+            return buffer
         }
-        let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: max(capacity, 4096))
-        scratch = buffer
-        return buffer
+        let new = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: max(capacity, 4096))
+        buffer = new
+        return new
     }
 }

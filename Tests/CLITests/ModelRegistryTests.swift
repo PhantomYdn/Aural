@@ -144,6 +144,57 @@ struct ModelRegistryTests {
         #expect(none.allSatisfy { !$0.current })
     }
 
+    @Test func fluidAudioCacheClassifiesBundles() {
+        #expect(FluidAudioCache.engine(forBundle: "parakeet-tdt-0.6b-v3") == "parakeet")
+        #expect(FluidAudioCache.engine(forBundle: "silero-vad") == "fluidaudio")
+        #expect(FluidAudioCache.engine(forBundle: "speaker-diarization") == "fluidaudio")
+    }
+
+    @Test func coreMLClassifiesEnginesAndFlagsCurrent() throws {
+        let dir = try tempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        // Simulate the shared FluidAudio cache: each variant dir holds a
+        // `.mlmodelc` bundle (coreMLModels keys off the bundle's parent dir).
+        func bundle(_ variant: String) throws {
+            let mlmodelc = dir.appendingPathComponent(variant)
+                .appendingPathComponent("model.mlmodelc")
+            try FileManager.default.createDirectory(at: mlmodelc, withIntermediateDirectories: true)
+            try Data(repeating: 0, count: 4).write(to: mlmodelc.appendingPathComponent("coremldata"))
+        }
+        try bundle("parakeet-tdt-0.6b-v3")
+        try bundle("silero-vad")
+        try bundle("speaker-diarization")
+
+        let models = ModelRegistry.coreMLModels(
+            engine: "fluidaudio", directory: dir,
+            classifyEngine: FluidAudioCache.engine(forBundle:),
+            config: Configuration(model: "v3", engine: "parakeet"))
+        let byName = Dictionary(uniqueKeysWithValues: models.map { ($0.name, $0) })
+
+        #expect(byName["parakeet-tdt-0.6b-v3"]?.engine == "parakeet")
+        #expect(byName["silero-vad"]?.engine == "fluidaudio")
+        #expect(byName["speaker-diarization"]?.engine == "fluidaudio")
+        // The configured parakeet/v3 default is flagged current; helpers are not.
+        #expect(byName["parakeet-tdt-0.6b-v3"]?.current == true)
+        #expect(byName["silero-vad"]?.current == false)
+        #expect(byName["speaker-diarization"]?.current == false)
+    }
+
+    @Test func coreMLNoCurrentWithoutMatchingConfig() throws {
+        let dir = try tempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let mlmodelc = dir.appendingPathComponent("openai_whisper-base")
+            .appendingPathComponent("AudioEncoder.mlmodelc")
+        try FileManager.default.createDirectory(at: mlmodelc, withIntermediateDirectories: true)
+        try Data(repeating: 0, count: 4).write(to: mlmodelc.appendingPathComponent("coremldata"))
+
+        let models = ModelRegistry.coreMLModels(
+            engine: "whisperkit", directory: dir, config: Configuration())
+        #expect(models.count == 1)
+        #expect(models[0].engine == "whisperkit")
+        #expect(models[0].current == false)
+    }
+
     @Test func shortNameFromPath() {
         #expect(ModelRegistry.shortName(forPath: "/x/ggml-base.en.bin") == "base.en")
         #expect(ModelRegistry.shortName(forPath: "/x/ggml-large-v3-turbo.bin") == "large-v3-turbo")

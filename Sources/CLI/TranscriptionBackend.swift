@@ -103,6 +103,30 @@ final class WhisperCLIBackend: TranscriptionBackend {
     var label: String { "whisper-cli (per-call)" }
 }
 
+/// Serializes access to a shared backend so several pipelines (e.g. the two
+/// source-attribution streams) can reuse one engine — one model load — without
+/// concurrent calls. `shutdown()` is forwarded once by the owner.
+final class SerializedBackend: TranscriptionBackend {
+    private let backend: TranscriptionBackend
+    private let lock = NSLock()
+
+    init(_ backend: TranscriptionBackend) { self.backend = backend }
+
+    var capabilities: EngineCapabilities { backend.capabilities }
+    var label: String { "\(backend.label) (shared)" }
+
+    func transcribe(
+        wavFile: URL, language: String?, translate: Bool, format: TranscriptOutputFormat
+    ) throws -> String {
+        lock.lock()
+        defer { lock.unlock() }
+        return try backend.transcribe(
+            wavFile: wavFile, language: language, translate: translate, format: format)
+    }
+
+    func shutdown() { backend.shutdown() }
+}
+
 /// Resolves a `TranscriptionBackend` for the selected engine, dispatching on
 /// the engine name. `whisper` (CLI/server) and `apple` (Speech.framework) are
 /// implemented; other named engines yield a clear "planned" error.

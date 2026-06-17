@@ -26,6 +26,11 @@ enum ModelCatalog {
     /// `parakeet:v3` / `parakeet-v3` → parakeet/v3; `whisperkit:tiny` →
     /// whisperkit/tiny; otherwise → whisper/<name>.
     static func parse(_ name: String) -> DownloadableModel {
+        if let id = tagged(name, engine: "fluidaudio") {
+            // fluidaudio:diarizer / fluidaudio:vad (CoreML helper models).
+            let component = id.isEmpty ? "diarizer" : id
+            return DownloadableModel(engine: "fluidaudio", name: name, modelId: component)
+        }
         if let id = tagged(name, engine: "parakeet") {
             // Normalize bare versions: `parakeet:v3`, `parakeet` → v3.
             let version = id.isEmpty ? "v3" : id
@@ -59,6 +64,11 @@ enum ModelCatalog {
         let parakeet = ParakeetBackend.downloadableVersions.map {
             DownloadableModel(engine: "parakeet", name: "parakeet:\($0)", modelId: $0)
         }
-        return whisper + whisperkit + parakeet
+        // CoreML speaker pipeline helpers (PRD §6.7): pre-fetch to avoid a
+        // first-use download on the default live path.
+        let fluidaudio = ["diarizer", "vad"].map {
+            DownloadableModel(engine: "fluidaudio", name: "fluidaudio:\($0)", modelId: $0)
+        }
+        return whisper + whisperkit + parakeet + fluidaudio
     }
 }

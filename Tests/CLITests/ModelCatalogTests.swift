@@ -37,7 +37,7 @@ struct ModelCatalogTests {
     @Test func availableCoversEveryEngine() {
         let catalog = ModelCatalog.available()
         let engines = Set(catalog.map(\.engine))
-        #expect(engines == ["whisper", "whisperkit", "parakeet"])
+        #expect(engines == ["whisper", "whisperkit", "parakeet", "fluidaudio"])
         #expect(catalog.contains { $0.name == "parakeet:v3" })
         #expect(catalog.contains { $0.name == "parakeet:v2" })
         #expect(catalog.contains { $0.name == "whisperkit:tiny" })

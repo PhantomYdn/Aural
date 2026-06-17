@@ -56,6 +56,11 @@ The tool strictly follows Unix/Linux design patterns, treating audio as a stream
 | 14 | Pluggable transcription engines | P2 | Select the engine with `--engine`: `whisper` (whisper.cpp, default), `apple` (native Speech.framework, no extra deps), `whisperkit` (CoreML, on-device, multilingual + translate). Capabilities (auto-detect, translate, model semantics) vary and are validated. |
 | 10 | Silence-based splitting | P2 | Split on continuous silence exceeding a configurable threshold (`--split silence=SEC`). |
 | 11 | Basic metadata embedding | P2 | Store recording start time, source name, and sample rate in WAV INFO, MP4, or ID3 tags. |
+| 15 | Speaker attribution by source (You vs Others) | P1 | When two sources are captured (`--mix`, or `--system`/`--app` + mic), keep the microphone and system audio as separate **internal** tracks and tag each transcript segment with its source ("You" = mic, "Others" = system). Deterministic and exact — no ML, no model download. This replaces the unreliable single-mixed-stream heuristic. |
+| 16 | Acoustic speaker diarization | P1 | Separate anonymous speakers ("Speaker 1/2…") within a single stream using FluidAudio CoreML models (on-device, Apple Neural Engine). Offline mode (batch `-i`, most accurate) and streaming mode (live capture). |
+| 17 | VAD-based live segmentation | P1 | Replace amplitude/silence-threshold segment cutting with Silero VAD (FluidAudio) for stable speech/pause boundaries at runtime; graceful fallback to the existing amplitude method when VAD models are unavailable. Feeds both transcription and the speaker pipeline. |
+| 18 | Combined source-split + per-source diarization | P2 | Label You (mic) plus each distinct remote participant (diarize the system track) so multi-party calls resolve both sides at once. |
+| 19 | Named speaker identification (enrolled voiceprints) | Post-MVP | Match voices to named people via stored speaker embeddings; enrollment + a local voiceprint store (FluidAudio embedding extraction). |
 
 ### 4.2 Post-MVP Features (Future)
 
@@ -66,6 +71,8 @@ The tool strictly follows Unix/Linux design patterns, treating audio as a stream
 - **Plugin system** to inject custom DSP filters (EQ, noise suppression) as middleware.
 - **Configuration profiles** to store default sources, formats, and transcription settings.
 - **Additional engines**: NVIDIA Parakeet (via FluidAudio CoreML); cloud backends (Deepgram, Google) selectable via `--engine`.
+- **Named speaker identification**: voiceprint enrollment and a local speaker store, so diarized speakers resolve to named people across recordings (FluidAudio speaker embeddings).
+- **Overlapping-speech handling**: per-word speaker assignment and crosstalk resolution when two speakers talk simultaneously.
 
 ---
 
@@ -121,6 +128,15 @@ As a **developer**, I want to capture audio from one specific app while excludin
   - [ ] `--exclude-app` captures all system audio except the listed applications
   - [ ] Notification sounds from excluded apps are absent from the resulting recording
 
+### US08 — Know who said what
+As a **developer**, I want my meeting transcript to label who said each line — me versus the call, and distinct remote speakers — so that I can produce accurate minutes and attribute action items.
+- Acceptance Criteria:
+  - [ ] `aural --system --mix --speakers -t mtg.srt` tags each cue with a speaker label (e.g. `You`, `Speaker 1`)
+  - [ ] Lines spoken into my microphone are labeled distinctly from the call audio (deterministic source attribution, not a guess)
+  - [ ] `aural --system --mix --speakers -t mtg.json` includes a `speaker` field on every segment
+  - [ ] Diarization runs fully on-device; the first run may download CoreML models, after which it is offline
+  - [ ] During live capture, speaker labels appear close to runtime (streaming), not only after the call ends
+
 ---
 
 ## 6. Functional Requirements
@@ -167,6 +183,13 @@ aural models | config                    # model + default management
 - `--translate` : output English regardless of the spoken language (whisper/whisperkit only).
 - `--raw` : with `-a -`, stream headerless raw PCM to stdout instead of a WAV container.
 
+**Speaker recognition (diarization) — see §6.7:**
+- `--speakers[=auto|source|acoustic]` (alias `--diarize`) : label transcript segments by speaker. `auto` (the value when the flag is given bare) attributes the microphone side by source ("You") and diarizes the system/single stream acoustically ("Speaker 1/2…"); `source` labels by capture source only (needs two sources); `acoustic` runs acoustic diarization only. Off by default.
+- `--max-speakers N` : cap/hint for acoustic diarization (bounded by the diarizer model's capacity; see §6.7).
+- `--speaker-threshold 0..1` : acoustic clustering sensitivity (default ~0.7; lower splits speakers more readily, higher merges them).
+- `--diarize-engine auto|streaming|offline` : pick the diarizer (default `auto` → streaming for live capture, offline for `-i` files).
+- `--speaker-labels "You,Others"` : rename the source-attribution labels (default `You,Others`).
+
 **Examples:**
 ```
 aural                                       # live mic, transcript -> stdout
@@ -178,6 +201,8 @@ aural -i in.wav -a out.m4a                   # convert between formats
 aural -a - | ffmpeg -i - ...                 # stream WAV into a pipe
 aural -i talk.mp3 --language auto -t talk.srt        # detect language -> subtitles
 aural --system --engine whisperkit --translate -t -  # any language -> English, live
+aural --system --mix --speakers -t mtg.srt           # meeting w/ speaker labels (You / Speaker N)
+aural -i mtg.wav --speakers=acoustic -t mtg.json     # diarize a recording -> labeled JSON
 ```
 
 **`aural devices`**
@@ -256,7 +281,7 @@ All invocations accept `-h, --help` and `-v, --verbose`.
 
 - Transcription is requested with `-t/--transcript` (or implied when no output flag is given). It applies uniformly to file input (`-i`), stdin (`-i -`), and live capture.
 - Input is normalised internally to 16 kHz mono 16-bit WAV (the whisper.cpp requirement) before the engine runs; any readable input format is therefore accepted without prior conversion.
-- For live capture, transcription should run as close to runtime as possible: the stream is segmented on natural pauses (with a maximum-window cap) and each segment is transcribed as it completes, appending to the destination. True streaming transcription is post-MVP; batch (transcribe-at-end) is the minimum acceptable behaviour for v1.
+- For live capture, transcription should run as close to runtime as possible: the stream is segmented on natural pauses (with a maximum-window cap) and each segment is transcribed as it completes, appending to the destination. True streaming transcription is post-MVP; batch (transcribe-at-end) is the minimum acceptable behaviour for v1. **Segment boundaries are determined by voice-activity detection (VAD) when available** (Silero via FluidAudio — far more stable than a raw amplitude threshold), falling back to the `--silence-threshold` amplitude heuristic when VAD models are absent; see §6.7. When `--speakers` is active, the same segmentation feeds the speaker pipeline so each emitted segment carries a speaker label.
 - When both `-a` and `-t` are given, audio and transcript are produced in the same capture pass.
 - If `--engine whisper`, call a system-installed whisper.cpp binary (`whisper-cli`/`whisper-cpp` on `PATH`, or `$AURAL_WHISPER_BIN`); if not found, provide a clear error with installation instructions (e.g., `brew install whisper-cpp`). The model comes from `--model` or `$AURAL_WHISPER_MODEL`.
 - Live transcription prefers a model-resident backend when `whisper-server` is available (`$AURAL_WHISPER_SERVER_BIN` to override the path): the server is launched once on loopback (127.0.0.1) so the model loads a single time, and each segment is transcribed via a local HTTP request to its `/inference` endpoint. This is local IPC with Aural's own child process — not an external network call. It is disabled with `AURAL_WHISPER_SERVER=0`, and Aural falls back to spawning `whisper-cli` per segment whenever the server is absent or fails to start, so transcription is never blocked by the optimization.
@@ -276,18 +301,42 @@ All invocations accept `-h, --help` and `-v, --verbose`.
 - `whisperkit` and `parakeet` are Apple-Silicon-first (clear error on Intel) and load their CoreML model once, reused across live segments (model-resident, like the whisper-server backend). Both build `srt`/`json` from engine timings (whisperkit segments, parakeet token timings).
 - `parakeet` auto-detects within its language set; a specific `--language` emits a notice and is ignored. `whisperkit` caches models under `~/.aural/models/whisperkit`; `parakeet` uses FluidAudio's managed cache (`~/Library/Application Support/FluidAudio/Models`). `aural models list` shows both.
 
+### 6.7 Speaker Recognition & Diarization
+
+Speaker labeling answers "who said what." It is **opt-in** via `--speakers`/`--diarize` (§6.1); without it, transcript output is unchanged. Two complementary mechanisms combine, because each is strong where the other is weak:
+
+**a) Source attribution (deterministic, no ML).** When Aural already captures two distinct sources — `--mix`, or `--system`/`--app` with the microphone — the microphone (you) and the system audio (everyone on the call) are *inherently separate signals*. Today they are summed into one stream before transcription (`StreamMixer`/`StreamMixing`), which discards that separation and forces any "who spoke" decision onto an unreliable single-stream heuristic. Under `--speakers`, Aural **keeps the mic and system as separate internal tracks**, transcribes/segments each independently, and tags segments by origin: the mic side is labeled `You`, the system side `Others` (relabel with `--speaker-labels "You,Others"`). This is exact, cheap, headless-safe, and needs no model download. **The packaged audio output (`-a`) remains the mixed stream** by default; separate-track *audio* output is out of scope here (see §4.2 / Open Questions).
+
+**b) Acoustic diarization (FluidAudio CoreML, on-device/ANE).** To resolve multiple distinct speakers *within* one stream — several remote participants on the system side, or a single-source/in-room recording — Aural uses FluidAudio's diarization models, reusing the dependency already linked for the `parakeet` engine (no new heavy dependency). Anonymous speakers are labeled `Speaker 1`, `Speaker 2`, …
+  - **Offline mode** (default for `-i` file input, and for live capture with `--diarize-engine offline`): the most accurate pipeline (Pyannote Community-1 — segmentation + speaker embeddings + clustering). Runs over the whole recording; for live capture it records the stream(s) and diarizes at stop (transcript at end).
+  - **Streaming mode** (default for live capture): real-time per-segment **speaker-embedding clustering** — each VAD segment is embedded (`extractSpeakerEmbedding`) and assigned to an existing or new cluster (`SpeakerManager`) → `Speaker N`. Reuses the live VAD segmentation; low-latency, incremental.
+  - `--diarize-engine auto|streaming|offline` overrides the mode; `--max-speakers N` caps the count; `--speaker-threshold` tunes clustering sensitivity.
+
+**c) Combined.** With `--speakers` (auto/acoustic) and two sources, Aural attributes the mic side as `You` (deterministic) and diarizes the system side, yielding `You` plus `Speaker 1/2…` for the remote participants in one transcript — live (streaming) or as an accurate offline pass at stop. `You` is a live-only label (a single mixed `-i` file can't separate your voice — everyone is `Speaker N`).
+
+**Runtime segmentation (the "delay in a sound" fix).** Live segmentation no longer relies solely on an amplitude/silence threshold. On Apple Silicon, **FluidAudio VAD (Silero) drives the speech/pause boundaries by default** (a full streaming state machine with hysteresis and speech padding; and, in streaming diarization, speaker-change turns also cut segments). The Silero CoreML model is fetched on the first live run (then fully local) — the one network-using exception on the default live path, opt out with `AURAL_VAD=0`. The existing `--silence-threshold` amplitude method remains the graceful fallback on Intel or whenever the VAD model can't be loaded, so transcription is never blocked. This stabilizes both transcription boundaries and speaker turns at runtime.
+
+**Output.** Speaker labels are carried in every transcript format:
+  - `txt` : each line is prefixed `Speaker 1: …` / `You: …`.
+  - `srt` : the speaker is prefixed in the cue text (`[Speaker 1] text`), keeping the file valid SRT.
+  - `json` : every segment object gains a `"speaker"` field alongside `start`/`end`/`text`.
+
+**Models & platform.**
+  - Diarization/VAD CoreML models are managed through `aural models` (engine-tagged, e.g. `fluidaudio:diarizer`, `fluidaudio:vad`) and FluidAudio's own cache (`~/Library/Application Support/FluidAudio/Models`); `aural models list` shows them. They download from Hugging Face on first use (opt-in network, then fully local) — consistent with the `whisperkit`/`parakeet` engines and §7 Security & Privacy.
+  - Acoustic diarization and VAD are **Apple-Silicon-first** (runtime-gated with a clear error on Intel, like `whisperkit`/`parakeet`). **Source attribution (a) has no such requirement** — it is pure stream routing and works everywhere `--mix` works, including headless. No new TCC permission is required (same captured audio).
+
 ---
 
 ## 7. Non-Functional Requirements
 
 | Category | Requirement |
 |----------|-------------|
-| **Performance** | Recording must use < 3% CPU on an Apple Silicon Mac (16 kHz mono); buffering delays < 100 ms. |
+| **Performance** | Recording must use < 3% CPU on an Apple Silicon Mac (16 kHz mono); buffering delays < 100 ms. Live diarization (streaming) must keep up with real time (RTF < 1) on Apple Silicon and emit speaker labels close to runtime — a tentative label within ~1 s and a finalized one within ~2 s of a turn. Offline (`-i`) diarization is bounded by file length, not interactive. Source attribution (§6.7a) adds negligible overhead. |
 | **Reliability** | 24-hour continuous recording must produce a valid, non-corrupted file when terminated via SIGINT/SIGTERM. Resilience to hard kills (SIGKILL, power loss) is parked — see Open Questions. |
 | **Usability** | CLI help and error messages are clear, include examples, and follow POSIX utility conventions. |
-| **Compatibility** | macOS 14.4 (Sonoma) and later — required by the Core Audio process-tap API; both Intel and Apple Silicon. The ScreenCaptureKit capture backend additionally needs macOS 15+ and a graphical login session; on macOS 14.x or headless it falls back to the Core Audio tap (see §6.2). The `whisperkit` and `parakeet` engines are Apple-Silicon-first (runtime-gated with a clear error on Intel); `whisper` and `apple` cover Intel. |
-| **Security & Privacy** | No external network calls by default; cloud transcription backends are opt-in and use HTTPS with user-provided API keys. (Live transcription may run a local `whisper-server` bound to loopback 127.0.0.1 for performance — IPC with Aural's own child process, never an external connection; disable with `AURAL_WHISPER_SERVER=0`.) System/app audio capture requires a TCC permission that depends on the backend (§6.2): the Core Audio tap uses the narrower "System Audio Recording" permission (and works headless); the ScreenCaptureKit backend requires the broader "Screen Recording" permission and a GUI session. Both are terminal-attributed for unbundled CLIs and their approval flows are documented. The `apple` engine uses the Speech Recognition TCC permission; `whisperkit` and `parakeet` download CoreML models from Hugging Face on first use (model fetch only, then fully local). |
-| **Maintainability** | Single Swift binary built with SwiftPM; modular targets: `DeviceManager`, `TapEngine`, `Encoders`, `CLI`. Well-documented code. The CoreML engines add the `argmaxinc/argmax-oss-swift` (whisperkit) and `FluidInference/FluidAudio` (parakeet) SwiftPM dependencies, currently always linked (a lean/trait-gated build is a future option — they increase binary size). |
+| **Compatibility** | macOS 14.4 (Sonoma) and later — required by the Core Audio process-tap API; both Intel and Apple Silicon. The ScreenCaptureKit capture backend additionally needs macOS 15+ and a graphical login session; on macOS 14.x or headless it falls back to the Core Audio tap (see §6.2). The `whisperkit` and `parakeet` engines, and **acoustic diarization / VAD (§6.7b)**, are Apple-Silicon-first (runtime-gated with a clear error on Intel); `whisper` and `apple` cover Intel. **Source attribution (§6.7a) is platform-agnostic** (pure stream routing) and works wherever `--mix` works, including headless. |
+| **Security & Privacy** | No external network calls by default; cloud transcription backends are opt-in and use HTTPS with user-provided API keys. (Live transcription may run a local `whisper-server` bound to loopback 127.0.0.1 for performance — IPC with Aural's own child process, never an external connection; disable with `AURAL_WHISPER_SERVER=0`.) System/app audio capture requires a TCC permission that depends on the backend (§6.2): the Core Audio tap uses the narrower "System Audio Recording" permission (and works headless); the ScreenCaptureKit backend requires the broader "Screen Recording" permission and a GUI session. Both are terminal-attributed for unbundled CLIs and their approval flows are documented. The `apple` engine uses the Speech Recognition TCC permission; `whisperkit` and `parakeet` download CoreML models from Hugging Face on first use (model fetch only, then fully local). Speaker diarization/VAD (§6.7) likewise fetch FluidAudio CoreML models from Hugging Face on first use, then run fully on-device, and require **no additional TCC permission** (they operate on already-captured audio). Note: live VAD segmentation is on by default on Apple Silicon, so its Silero model is fetched on the first live run — a deliberate, documented exception to "no network by default", opt out with `AURAL_VAD=0`. |
+| **Maintainability** | Single Swift binary built with SwiftPM; modular targets: `DeviceManager`, `TapEngine`, `Encoders`, `CLI`. Well-documented code. The CoreML engines add the `argmaxinc/argmax-oss-swift` (whisperkit) and `FluidInference/FluidAudio` (parakeet) SwiftPM dependencies, currently always linked (a lean/trait-gated build is a future option — they increase binary size). Speaker diarization and VAD (§6.7) reuse the already-linked `FluidInference/FluidAudio` dependency, so they add no new SwiftPM dependency (only additional model assets). |
 | **Installability** | Distributed via Homebrew (`brew install aural`) and direct download from GitHub Releases; binary is signed and notarized so TCC permission flows work cleanly. |
 | **Auditability** | All recorded file paths and durations are logged to STDERR when `-v` is enabled. |
 
@@ -299,6 +348,10 @@ All invocations accept `-h, --help` and `-v, --verbose`.
 - **Pipeline integration:** At least two open-source transcription projects (e.g., `whisper.cpp`, `faster-whisper`) officially list Aural as a recommended capture tool.
 - **Reliability:** Crash-free session rate > 99.5%, measured via strictly opt-in telemetry (consistent with the "no network calls by default" security requirement; mechanism TBD — see Open Questions).
 - **Community engagement:** Minimum 10 pull requests contributed from external developers within 6 months (discouraging feature bloat, but demonstrating extendability).
+- **Source attribution accuracy:** ~100% — in a two-source capture, every segment is attributed to its true origin (mic vs system) because the routing is deterministic, not inferred.
+- **Diarization quality:** Diarization Error Rate (DER) on a reference set (e.g. AMI-style meeting audio) within a documented target band for the chosen FluidAudio model; tracked offline so regressions are visible.
+- **Runtime labeling latency:** ≥ 90% of live speaker labels finalized within ~2 s of the corresponding turn (per §7 Performance).
+- **Segmentation stability:** VAD-based live segmentation produces measurably fewer spurious cuts than the amplitude-threshold method on a fixed test clip (the "delay in a sound" instability this feature targets).
 
 ---
 
@@ -312,7 +365,8 @@ All invocations accept `-h, --help` and `-v, --verbose`.
 | **M4 – Transcription MVP** | Root-verb transcription with local Whisper support; stdin/file/live input; combined `-a`+`-t` | Week 7 | M3 |
 | **M5 – Polish & Release** | Code signing & notarization, Homebrew formula, man page, example scripts, CI/CD, public beta | Week 8–9 | M2, M3, M4 |
 | **M6 – Engines & Languages** | Engine abstraction; multilingual + `--translate` + `--language auto` on whisper; `aural models`; `apple` (Speech.framework) and `whisperkit` (CoreML) engines | Post-M5 | M4 |
-| **Post-MVP** | Daemon mode (launchd scheduled recording), silence VAD, streaming transcription, cloud backends, configuration profiles | Ongoing | M5 |
+| **M7 – Speaker Recognition & Runtime Segmentation** | Source attribution (You/Others) via internal multi-track capture; acoustic diarization (FluidAudio, offline + streaming); VAD-based live segmentation; `--speakers`/`--diarize` flags; speaker labels in txt/srt/json; diarization/VAD models in `aural models` | Post-M6 | M4, M6 |
+| **Post-MVP** | Daemon mode (launchd scheduled recording), streaming transcription, cloud backends, configuration profiles, named speaker identification (voiceprints), overlapping-speech handling | Ongoing | M5 |
 
 ---
 
@@ -322,6 +376,10 @@ All invocations accept `-h, --help` and `-v, --verbose`.
 2. **Whisper bundling:** Will the tool bundle a transcription engine or expect the user to install it separately? (Assumption: no bundling to keep the binary small; document external dependencies.)
 3. **Telemetry mechanism:** What opt-in mechanism (if any) will measure the crash-free-rate KPI without violating the no-network-by-default principle?
 4. **TCC for unbundled CLI:** Confirm the exact permission-attribution behaviour for a signed standalone binary vs. terminal-attributed permission, and document the recommended setup.
+5. **Named speaker identification (deferred):** How should enrolled voiceprints be stored and matched (local embedding store, privacy, cross-recording identity), and what CLI surface (`aural speakers enroll`?) does it need? Deferred to Post-MVP.
+6. **Overlapping speech:** How are simultaneous speakers handled — drop to a single label, mark overlap, or attempt per-word assignment? Depends on the chosen FluidAudio diarizer's capabilities; deferred.
+7. ~~**Diarization streaming model choice:** LS-EEND vs Sortformer~~ → **Resolved:** live streaming uses per-segment **speaker-embedding clustering** (FluidAudio `extractSpeakerEmbedding` + `SpeakerManager`), reusing the VAD segmentation rather than an end-to-end frame model — simpler and lower-risk. Tunable via `--speaker-threshold`/`--max-speakers`. (FluidAudio model-download footprint of always-linking the diarization assets is still open.)
+8. **Separate-track audio output:** Whether to expose the internal mic/system separation as user-facing audio output (e.g. dual files or L/R channels), beyond its use for transcript attribution. Currently scoped out (see §4.2).
 
 ### Resolved (2026-06-12)
 - ~~Language/stack~~ → **Swift**, single binary, SwiftPM modular targets.

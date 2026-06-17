@@ -1,3 +1,5 @@
+@preconcurrency import AVFoundation
+import CoreAudio
 import Encoders
 import Foundation
 import Testing
@@ -99,5 +101,62 @@ struct StreamMixingTests {
 
     @Test func emptyInputsYieldEmpty() {
         #expect(StreamMixing.sum(Data(), Data(), format: format(16)).isEmpty)
+    }
+}
+
+/// Source attribution (PRD §6.7a): from one aggregate input list (mic + tap),
+/// `StreamMixer` produces the mix, the system-only signal, and the mic-only
+/// signal (mono upmixed across tap channels).
+@Suite("StreamMixer per-source")
+struct StreamMixerSourceTests {
+    private let tapFormat = AVAudioFormat(
+        commonFormat: .pcmFormatFloat32, sampleRate: 48000, channels: 2, interleaved: true)!
+
+    /// Runs `body` with an aggregate-style buffer list: a mono mic stream first,
+    /// the stereo tap stream last (matching the IOProc layout).
+    private func withList(
+        mic: [Float], tapStereo: [Float], _ body: (UnsafePointer<AudioBufferList>) -> Void
+    ) {
+        var micData = mic
+        var tapData = tapStereo
+        micData.withUnsafeMutableBytes { micRaw in
+            tapData.withUnsafeMutableBytes { tapRaw in
+                let abl = AudioBufferList.allocate(maximumBuffers: 2)
+                abl[0] = AudioBuffer(
+                    mNumberChannels: 1, mDataByteSize: UInt32(micRaw.count),
+                    mData: micRaw.baseAddress)
+                abl[1] = AudioBuffer(
+                    mNumberChannels: 2, mDataByteSize: UInt32(tapRaw.count),
+                    mData: tapRaw.baseAddress)
+                body(UnsafePointer(abl.unsafeMutablePointer))
+                free(abl.unsafeMutablePointer)
+            }
+        }
+    }
+
+    private func interleaved(_ buffer: AVAudioPCMBuffer?, frames: Int) -> [Float] {
+        guard let buffer, let p = buffer.floatChannelData?[0] else { return [] }
+        return (0..<(frames * 2)).map { p[$0] }
+    }
+
+    private func approxEqual(_ a: [Float], _ b: [Float]) -> Bool {
+        a.count == b.count && zip(a, b).allSatisfy { abs($0 - $1) < 1e-5 }
+    }
+
+    @Test func separatesSystemAndMicAndMix() {
+        let mixer = StreamMixer(tapChannels: 2)
+        // 2 frames: tap (L,R,L,R), mic mono (m0, m1).
+        let tap: [Float] = [0.1, 0.2, 0.3, 0.4]
+        let mic: [Float] = [0.5, 0.6]
+        withList(mic: mic, tapStereo: tap) { list in
+            let system = interleaved(mixer.systemBuffer(from: list, tapFormat: tapFormat), frames: 2)
+            #expect(approxEqual(system, [0.1, 0.2, 0.3, 0.4]))  // tap only
+
+            let micOnly = interleaved(mixer.micBuffer(from: list, tapFormat: tapFormat), frames: 2)
+            #expect(approxEqual(micOnly, [0.5, 0.5, 0.6, 0.6]))  // mono upmixed
+
+            let mixed = interleaved(mixer.mixedBuffer(from: list, tapFormat: tapFormat), frames: 2)
+            #expect(approxEqual(mixed, [0.6, 0.7, 0.9, 1.0]))  // tap + mic
+        }
     }
 }

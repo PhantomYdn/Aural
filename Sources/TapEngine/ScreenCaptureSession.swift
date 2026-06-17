@@ -14,7 +14,7 @@ import ScreenCaptureKit
 /// session; it cannot run headless. The Core Audio `SystemCaptureSession` is the
 /// headless-capable fallback.
 @available(macOS 15.0, *)
-public final class ScreenCaptureSession: NSObject, CaptureSession, SCStreamOutput,
+public final class ScreenCaptureSession: NSObject, MultiTrackCaptureSession, SCStreamOutput,
     SCStreamDelegate, @unchecked Sendable
 {
     public enum ScreenCaptureError: Error, CustomStringConvertible {
@@ -60,6 +60,11 @@ public final class ScreenCaptureSession: NSObject, CaptureSession, SCStreamOutpu
     private var micConverter: PCMStreamConverter?
     private var onAudio: (@Sendable (Data) -> Void)?
     private var started = false
+
+    /// When set (and `--mix` is active), each source is also delivered
+    /// separately for attribution (PRD §6.7a). The two SCStream outputs are
+    /// already separate, so this just tees them before mixing.
+    public var onSourceAudio: (@Sendable (CaptureSource, Data) -> Void)?
 
     // Software mixer state (only used with --mix): converted, output-format
     // packed PCM queued per source and summed by sample position.
@@ -146,9 +151,15 @@ public final class ScreenCaptureSession: NSObject, CaptureSession, SCStreamOutpu
         switch type {
         case .audio:
             guard let data = convert(sampleBuffer, converter: &systemConverter) else { return }
-            if mixMic { enqueue(system: data) } else { onAudio?(data) }
+            if mixMic {
+                onSourceAudio?(.system, data)
+                enqueue(system: data)
+            } else {
+                onAudio?(data)
+            }
         case .microphone:
             guard mixMic, let data = convert(sampleBuffer, converter: &micConverter) else { return }
+            onSourceAudio?(.microphone, data)
             enqueue(mic: data)
         default:
             break
