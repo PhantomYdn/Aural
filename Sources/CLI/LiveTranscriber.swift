@@ -151,7 +151,7 @@ final class LiveTranscriber: AudioSink, @unchecked Sendable {
             guard let self, self.failure.take() == nil else { return }
             do {
                 let (text, speaker) = try self.transcribeSegment(
-                    segment, format: segFormat, durationSeconds: end - start)
+                    segment, format: segFormat, start: start, end: end)
                 let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
                 if !trimmed.isEmpty && !Self.isNonSpeech(trimmed) {
                     try self.writer.append(text: trimmed, start: start, end: end, speaker: speaker)
@@ -164,9 +164,10 @@ final class LiveTranscriber: AudioSink, @unchecked Sendable {
 
     /// Stages one segment as a temporary WAV, normalizes it to whisper's
     /// 16 kHz mono format, and returns the recognized text plus its speaker
-    /// label (from the optional acoustic resolver, else the fixed label).
+    /// label (from the optional acoustic resolver over `[start, end]`, else the
+    /// fixed label).
     private func transcribeSegment(
-        _ pcm: Data, format: PCMFormat, durationSeconds: Double
+        _ pcm: Data, format: PCMFormat, start: Double, end: Double
     ) throws -> (text: String, speaker: String?) {
         let raw = FileManager.default.temporaryDirectory
             .appendingPathComponent("aural-seg-\(UUID().uuidString).wav")
@@ -183,8 +184,7 @@ final class LiveTranscriber: AudioSink, @unchecked Sendable {
         defer { try? FileManager.default.removeItem(at: normalized) }
         let text = try transcriber.transcribe(
             wavFile: normalized, language: language, translate: translate, format: .txt)
-        let speaker = resolver?.label(forWav: normalized, durationSeconds: durationSeconds)
-            ?? self.speaker
+        let speaker = resolver?.label(start: start, end: end) ?? self.speaker
         return (text, speaker)
     }
 

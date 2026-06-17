@@ -136,7 +136,9 @@ struct Configuration: Codable, Equatable {
             format: { $0 }),
         TypedSetting(.maxSpeakers, .int, "(unset)", \.maxSpeakers,
             parse: { try ConfigKey.parsePositiveInt($0, .maxSpeakers) }, format: { String($0) }),
-        TypedSetting(.speakerThreshold, .double, "(auto)", \.speakerThreshold,
+        TypedSetting(
+            .speakerThreshold, .double, ConfigKey.formatNumber(DiarizationDefaults.clusteringThreshold),
+            \.speakerThreshold,
             parse: { try ConfigKey.parseUnit($0, .speakerThreshold) }, format: ConfigKey.formatNumber),
     ]
 

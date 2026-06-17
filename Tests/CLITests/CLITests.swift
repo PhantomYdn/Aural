@@ -915,7 +915,7 @@ struct DiarizationIntegrationTests {
 private final class FixedResolver: LiveSpeakerResolver, @unchecked Sendable {
     private let value: String
     init(_ value: String) { self.value = value }
-    func label(forWav wav: URL, durationSeconds: Double) -> String? { value }
+    func label(start: Double, end: Double) -> String? { value }
 }
 
 @Suite("Streaming diarization labeling")

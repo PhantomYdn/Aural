@@ -269,6 +269,24 @@
 - [x] Docs: README "Speaker labels" section (flags table + examples + caveats) + `fluidaudio:` model rows + `AURAL_VAD`; man `SPEAKER LABELING` section + `AURAL_VAD` + examples (mandoc clean); docs/permissions.md diarization/VAD note (no new TCC, first-use model fetch); corrected the stale `--speakers`/`--diarize-engine` `--help` strings (no longer say "planned")
 - [ ] `Scripts/verify-live.sh`: add a gated `--system --mix --speakers` smoke step (perms/arch → SKIP)
 
+### Phase 8.8 — Streaming diarization upgrade (LS-EEND, replacing per-segment clustering)
+
+> Motivation: the per-segment embedding-clustering streaming diarizer (8.4) collapsed
+> distinct speakers in real meetings — a single VAD segment routinely blends several
+> voices, and the whole-segment all-ones-mask embedding (`extractSpeakerEmbedding`) is
+> not discriminative, so the persistent fingerprint store merged everyone into
+> `Speaker 1/2`. Lowering `--speaker-threshold` couldn't fix a non-discriminative
+> embedding. Batch/offline (clean-frame masks) separated the same audio fine, proving
+> embedding quality — not the threshold — was the bottleneck.
+
+- [x] Lowered the offline/batch default clustering threshold (`DiarizationDefaults.clusteringThreshold = 0.65`, effective ~0.78 after FluidAudio's ×1.2) so `-i FILE --speakers` no longer collapses to one speaker; surfaced the real default in `config show`
+- [ ] Replace the live **streaming** diarizer with FluidAudio **LS-EEND** (long-form streaming end-to-end neural diarization): `EENDStreamingDiarizer` wraps `LSEENDDiarizer`, ingests the system/single stream continuously (`addAudio`/`process`), and maintains a frame-level `DiarizerTimeline` (~100 ms updates) independent of the ASR VAD segmentation — speaker turns detected by **voice** (incl. overlap), not silence
+- [ ] Decouple the live speaker resolver from ASR segments: `LiveSpeakerResolver.label(start:end:)` queries the timeline for the dominant speaker over a segment's time window (was per-segment WAV re-decode); thread segment `start`/`end` through `LiveTranscriber`
+- [ ] `TimelineDiarizerSink` (`AudioSink`) tees the `.system` PCM to the diarizer (off the capture IO thread); wire `.system` → `[diarizerSink, systemTranscriber]` in `runSourceAttributedLive`/`runSingleDiarizedLive`; finalize the session at stop
+- [ ] Retire the legacy live `StreamingDiarizer` + `ClusteringSpeakerResolver` (clustering stays for offline/batch); `--speaker-threshold`/`--max-speakers` are now offline/batch-only (no clustering knob in EEND)
+- [ ] Model plumbing: LS-EEND bundle in `FluidAudioCache`, `fluidaudio:streaming-diarizer` in `ModelCatalog`, download branch in `ModelDownloader`
+- [ ] Validate on test5 (live multi-party): distinct speakers ≫ 2 (offline finds ~4); streaming RTF < 1 / latency within PRD §7
+
 ## Future
 
 > Nice-to-have items outside current scope.

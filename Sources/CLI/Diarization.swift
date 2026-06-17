@@ -2,6 +2,20 @@ import Encoders
 import FluidAudio
 import Foundation
 
+/// Tuning for FluidAudio acoustic diarization shared by the streaming and
+/// offline paths.
+enum DiarizationDefaults {
+    /// Default embedding-clustering threshold (in `--speaker-threshold` units).
+    ///
+    /// FluidAudio's library default is `0.7`, but `DiarizerManager` multiplies it
+    /// by `1.2` to derive the `SpeakerManager` assignment cutoff — an effective
+    /// `0.84` cosine distance, which is far too lenient and collapses distinct
+    /// speakers into a single `Speaker 1`. We lower it so the effective cutoff
+    /// lands near `0.78`, separating voices without over-splitting. Overridden by
+    /// `--speaker-threshold`. (`Double` so `config show` can render it cleanly.)
+    static let clusteringThreshold: Double = 0.65
+}
+
 /// One diarized span: a time range attributed to a speaker label.
 struct DiarizedSegment: Equatable {
     let start: Double
@@ -46,68 +60,12 @@ struct SpeakerNumbering {
     }
 }
 
-/// A per-segment speaker label for live transcription (PRD §6.7). Returns nil to
-/// fall back to the transcriber's fixed label.
+/// A speaker label for a live transcript segment spanning `[start, end]`
+/// seconds (PRD §6.7). Backed by the streaming EEND diarizer's timeline
+/// (`EENDStreamingDiarizer`). Returns nil to fall back to the transcriber's
+/// fixed label.
 protocol LiveSpeakerResolver: AnyObject, Sendable {
-    func label(forWav wav: URL, durationSeconds: Double) -> String?
-}
-
-/// Streaming acoustic diarization: assigns each live segment to `Speaker N` via
-/// FluidAudio speaker embeddings + online clustering (`SpeakerManager`). Driven
-/// serially from one transcription worker (single-consumer). Apple-Silicon-first;
-/// the model is loaded once and shared.
-final class StreamingDiarizer: @unchecked Sendable {
-    private let manager: DiarizerManager
-    private var numbering = SpeakerNumbering()
-
-    private init(manager: DiarizerManager) { self.manager = manager }
-
-    static func make(maxSpeakers: Int?, threshold: Double?) throws -> StreamingDiarizer {
-        guard Platform.isAppleSilicon else {
-            throw AuralError.unavailable("""
-                acoustic diarization requires Apple Silicon (CoreML/ANE). Deterministic \
-                source attribution (--system/--app --mix --speakers --speaker-mode source) \
-                works on Intel.
-                """)
-        }
-        if FluidAudioCache.isCached(FluidAudioCache.diarizerBundle) {
-            Log.verbose("loading diarization model")
-        } else {
-            Log.notice("downloading diarization model (first use)…")
-        }
-        var config = DiarizerConfig()
-        if let maxSpeakers { config.numClusters = maxSpeakers }
-        if let threshold { config.clusteringThreshold = Float(threshold) }
-        let manager = DiarizerManager(config: config)
-        let models = try RunLoopBridge.runBlocking(timeout: 1800) {
-            UncheckedSendableBox(value: try await DiarizerModels.downloadIfNeeded())
-        }
-        manager.initialize(models: models.value)
-        return StreamingDiarizer(manager: manager)
-    }
-
-    /// Assigns a 16 kHz mono segment to a `Speaker N` label, or nil if it can't
-    /// be embedded/clustered (e.g. too short).
-    func label(forSamples samples: [Float], durationSeconds: Double) -> String? {
-        guard let embedding = try? manager.extractSpeakerEmbedding(from: samples),
-            let speaker = manager.speakerManager.assignSpeaker(
-                embedding, speechDuration: Float(durationSeconds))
-        else { return nil }
-        return numbering.label(for: speaker.id)
-    }
-}
-
-/// `LiveSpeakerResolver` backed by streaming diarization: decodes the normalized
-/// segment WAV to 16 kHz mono and asks the `StreamingDiarizer` for a label.
-final class ClusteringSpeakerResolver: LiveSpeakerResolver, @unchecked Sendable {
-    private let diarizer: StreamingDiarizer
-
-    init(_ diarizer: StreamingDiarizer) { self.diarizer = diarizer }
-
-    func label(forWav wav: URL, durationSeconds: Double) -> String? {
-        guard let samples = try? AudioConverter().resampleAudioFile(wav) else { return nil }
-        return diarizer.label(forSamples: samples, durationSeconds: durationSeconds)
-    }
+    func label(start: Double, end: Double) -> String?
 }
 
 /// Offline acoustic diarization via FluidAudio's Pyannote pipeline (CoreML/ANE).
@@ -132,7 +90,7 @@ final class SpeakerDiarizer {
         }
         var config = DiarizerConfig()
         if let maxSpeakers { config.numClusters = maxSpeakers }
-        if let threshold { config.clusteringThreshold = Float(threshold) }
+        config.clusteringThreshold = Float(threshold ?? DiarizationDefaults.clusteringThreshold)
         let manager = DiarizerManager(config: config)
         let models = try RunLoopBridge.runBlocking(timeout: 1800) {
             UncheckedSendableBox(value: try await DiarizerModels.downloadIfNeeded())

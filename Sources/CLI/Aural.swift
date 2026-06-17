@@ -204,18 +204,21 @@ struct Aural: ParsableCommand {
 
     @Option(name: .customLong("diarize-engine"), help: ArgumentHelp(
         "Acoustic diarizer: auto (default: streaming live / offline batch), streaming "
-            + "(real-time live), or offline (accurate, diarized at end of capture).",
+            + "(real-time live, LS-EEND neural model), or offline (accurate, diarized "
+            + "at end of capture).",
         valueName: "auto|streaming|offline"))
     var diarizeEngine: DiarizeEngine?
 
     @Option(name: .customLong("max-speakers"), help: ArgumentHelp(
-        "With acoustic diarization: cap the number of distinct speakers.",
+        "Offline/batch diarization only: cap the number of distinct speakers "
+            + "(no effect on the live streaming EEND diarizer).",
         valueName: "n"))
     var maxSpeakers: Int?
 
     @Option(name: .customLong("speaker-threshold"), help: ArgumentHelp(
-        "Acoustic clustering sensitivity (0–1; default ~0.7). Lower splits speakers "
-            + "more readily, higher merges them.",
+        "Offline/batch clustering sensitivity (0–1; default ~0.65). Lower splits "
+            + "speakers more readily, higher merges them. No effect on the live "
+            + "streaming EEND diarizer.",
         valueName: "0..1"))
     var speakerThreshold: Double?
 
@@ -534,20 +537,20 @@ struct Aural: ParsableCommand {
             try runSourceAttributedLive(
                 outputs: outputs, settings: settings, captureEngine: captureEngine,
                 session: session, format: format, mixedSinks: sinks, labels: labels,
-                systemResolver: nil)
+                systemDiarizer: nil)
             return
         case .sourceDiarized(let labels, .streaming):
-            let resolver = try makeStreamingResolver(settings: settings)
+            let diarizer = try makeStreamingDiarizer(settings: settings)
             try runSourceAttributedLive(
                 outputs: outputs, settings: settings, captureEngine: captureEngine,
                 session: session, format: format, mixedSinks: sinks, labels: labels,
-                systemResolver: resolver)
+                systemDiarizer: diarizer)
             return
         case .singleDiarized(.streaming):
-            let resolver = try makeStreamingResolver(settings: settings)
+            let diarizer = try makeStreamingDiarizer(settings: settings)
             try runSingleDiarizedLive(
                 outputs: outputs, settings: settings, captureEngine: captureEngine,
-                session: session, format: format, mixedSinks: sinks, resolver: resolver)
+                session: session, format: format, mixedSinks: sinks, diarizer: diarizer)
             return
         case .sourceDiarized(let labels, .offline):
             try runOfflineLive(
@@ -623,13 +626,11 @@ struct Aural: ParsableCommand {
         return twoSources ? .sourceDiarized(labels, mode) : .singleDiarized(mode)
     }
 
-    /// Loads the streaming diarizer for the system/single stream, or returns nil
-    /// (with a notice) if it can't load — callers fall back to a fixed label.
-    private func makeStreamingResolver(settings: ResolvedSettings) throws -> LiveSpeakerResolver? {
+    /// Loads the streaming EEND diarizer for the system/single stream, or returns
+    /// nil (with a notice) if it can't load — callers fall back to a fixed label.
+    private func makeStreamingDiarizer(settings: ResolvedSettings) throws -> EENDStreamingDiarizer? {
         do {
-            let diarizer = try StreamingDiarizer.make(
-                maxSpeakers: settings.maxSpeakers, threshold: settings.speakerThreshold)
-            return ClusteringSpeakerResolver(diarizer)
+            return try EENDStreamingDiarizer.make()
         } catch let error as AuralError {
             Log.notice("acoustic diarization unavailable (\(error.message)); falling back to a single label.")
             return nil
@@ -638,11 +639,12 @@ struct Aural: ParsableCommand {
 
     /// Two-source live attribution: one shared transcript + engine; a mic
     /// transcriber labeled `you`, and a system transcriber labeled `others` —
-    /// or, when `systemResolver` is given, diarized into `Speaker 1..N`.
+    /// or, when `systemDiarizer` is given, the system side is diarized into
+    /// `Speaker 1..N` by the streaming EEND timeline.
     private func runSourceAttributedLive(
         outputs: ResolvedOutputs, settings: ResolvedSettings, captureEngine: CaptureEngine,
         session: CaptureSession, format: PCMFormat, mixedSinks: [AudioSink], labels: SpeakerLabels,
-        systemResolver: LiveSpeakerResolver?
+        systemDiarizer: EENDStreamingDiarizer?
     ) throws {
         guard let transcriptDest = outputs.transcript else {
             throw AuralError.usage("""
@@ -665,21 +667,29 @@ struct Aural: ParsableCommand {
             useVad: settings.useVad, vadThreshold: settings.vadThreshold, useGain: settings.useGain)
         let systemTranscriber = LiveTranscriber(
             sharedWriter: writer, sharedBackend: backend, speaker: labels.others,
-            resolver: systemResolver, language: settings.language, translate: settings.translate,
+            resolver: systemDiarizer, language: settings.language, translate: settings.translate,
             captureFormat: format, silenceThresholdDBFS: settings.silenceThreshold,
             useVad: settings.useVad, vadThreshold: settings.vadThreshold, useGain: settings.useGain)
 
-        let othersDesc = systemResolver != nil ? "Speaker N" : labels.others
+        let othersDesc = systemDiarizer != nil ? "Speaker N" : labels.others
         if outputs.audio == nil && duration == nil {
             Log.notice(
                 "listening (speakers: \(labels.you) + \(othersDesc)) — press Ctrl+C to stop")
         }
         Log.verbose("destination: \(transcriptDest.label) [\(labels.you)/\(othersDesc)]")
 
+        // Route the system track to the diarizer (continuous, ahead of the
+        // transcriber so the timeline is advanced first) and to its transcriber.
+        var sourceSinks: [(CaptureSource, AudioSink)] = [(.microphone, micTranscriber)]
+        if let systemDiarizer {
+            sourceSinks.append((.system, TimelineDiarizerSink(diarizer: systemDiarizer, format: format)))
+        }
+        sourceSinks.append((.system, systemTranscriber))
+
         try captureEngine.run(
             session: session, format: format, into: mixedSinks,
             duration: duration, warnOnSilence: captureSystem,
-            sourceSinks: [(.microphone, micTranscriber), (.system, systemTranscriber)])
+            sourceSinks: sourceSinks)
 
         try? writer.close()
         backend.shutdown()
@@ -692,7 +702,7 @@ struct Aural: ParsableCommand {
     private func runSingleDiarizedLive(
         outputs: ResolvedOutputs, settings: ResolvedSettings, captureEngine: CaptureEngine,
         session: CaptureSession, format: PCMFormat, mixedSinks: [AudioSink],
-        resolver: LiveSpeakerResolver?
+        diarizer: EENDStreamingDiarizer?
     ) throws {
         guard let transcriptDest = outputs.transcript else {
             throw AuralError.usage(
@@ -708,15 +718,23 @@ struct Aural: ParsableCommand {
             backend: backend, writer: writer, ownsBackend: false, ownsWriter: false,
             speaker: nil, language: settings.language, translate: settings.translate,
             captureFormat: format, silenceThresholdDBFS: settings.silenceThreshold,
-            labelName: "live transcript [Speaker N]", resolver: resolver,
+            labelName: "live transcript [Speaker N]", resolver: diarizer,
             useVad: settings.useVad, vadThreshold: settings.vadThreshold, useGain: settings.useGain)
 
         if outputs.audio == nil && duration == nil {
             Log.notice("listening (speakers: Speaker N) — press Ctrl+C to stop")
         }
 
+        // Feed the single stream to the diarizer (ahead of the transcriber so
+        // the timeline is advanced first), then transcribe.
+        var sinks = mixedSinks
+        if let diarizer {
+            sinks.append(TimelineDiarizerSink(diarizer: diarizer, format: format))
+        }
+        sinks.append(transcriber)
+
         try captureEngine.run(
-            session: session, format: format, into: mixedSinks + [transcriber],
+            session: session, format: format, into: sinks,
             duration: duration, warnOnSilence: captureSystem)
         try? writer.close()
         backend.shutdown()

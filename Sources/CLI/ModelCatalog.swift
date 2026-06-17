@@ -65,8 +65,10 @@ enum ModelCatalog {
             DownloadableModel(engine: "parakeet", name: "parakeet:\($0)", modelId: $0)
         }
         // CoreML speaker pipeline helpers (PRD §6.7): pre-fetch to avoid a
-        // first-use download on the default live path.
-        let fluidaudio = ["diarizer", "vad"].map {
+        // first-use download on the default live path. `diarizer` is the
+        // offline/batch Pyannote pipeline; `streaming-diarizer` is the live
+        // LS-EEND model; `vad` is Silero.
+        let fluidaudio = ["diarizer", "streaming-diarizer", "vad"].map {
             DownloadableModel(engine: "fluidaudio", name: "fluidaudio:\($0)", modelId: $0)
         }
         return whisper + whisperkit + parakeet + fluidaudio

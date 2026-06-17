@@ -208,6 +208,7 @@ enum ModelDownloader {
         case "fluidaudio":
             switch spec.modelId {
             case "vad": try FluidVadClassifier.downloadModel()
+            case "streaming-diarizer": try EENDStreamingDiarizer.download()
             default: try SpeakerDiarizer.download()
             }
         default: try downloadGGML(name: spec.modelId, force: force)
