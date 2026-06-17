@@ -31,6 +31,7 @@ struct ConfigShow: ParsableCommand {
     struct Entry: Encodable {
         let value: String
         let source: String
+        let description: String
     }
 
     @Flag(help: "Output as JSON for scripting.")
@@ -44,15 +45,18 @@ struct ConfigShow: ParsableCommand {
             let environment = ProcessInfo.processInfo.environment
             let resolved = Configuration.settings.map { setting -> (key: String, entry: Entry) in
                 let (value, source) = setting.effective(config: config, env: environment)
-                return (setting.key.rawValue, Entry(value: value, source: source.rawValue))
+                return (
+                    setting.key.rawValue,
+                    Entry(value: value, source: source.rawValue, description: setting.summary)
+                )
             }
             if json {
                 let object = Dictionary(uniqueKeysWithValues: resolved.map { ($0.key, $0.entry) })
                 print(try OutputFormatting.json(object))
                 return
             }
-            let rows = resolved.map { [$0.key, $0.entry.value, $0.entry.source] }
-            print(OutputFormatting.table(header: ["KEY", "VALUE", "SOURCE"], rows: rows))
+            let rows = resolved.map { [$0.key, $0.entry.value, $0.entry.source, $0.entry.description] }
+            print(OutputFormatting.table(header: ["KEY", "VALUE", "SOURCE", "DESCRIPTION"], rows: rows))
         }
     }
 }

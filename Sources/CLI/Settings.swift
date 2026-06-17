@@ -24,6 +24,8 @@ protocol Setting: Sendable {
     var key: ConfigKey { get }
     var kind: SettingKind { get }
     var defaultDisplay: String { get }
+    /// One-sentence explanation of the setting, for the `config show` DESCRIPTION column.
+    var summary: String { get }
     var envName: String { get }
     func configDisplay(_ c: Configuration) -> String?
     func envDisplay(_ env: [String: String]) -> String?
@@ -46,6 +48,7 @@ struct TypedSetting<V>: Setting {
     let key: ConfigKey
     let kind: SettingKind
     let defaultDisplay: String
+    let summary: String
     private let keyPath: WritableKeyPath<Configuration, V?> & Sendable
     private let parser: @Sendable (String) throws -> V
     private let formatter: @Sendable (V) -> String
@@ -53,11 +56,13 @@ struct TypedSetting<V>: Setting {
     init(
         _ key: ConfigKey, _ kind: SettingKind, _ defaultDisplay: String,
         _ keyPath: WritableKeyPath<Configuration, V?> & Sendable,
-        parse: @escaping @Sendable (String) throws -> V, format: @escaping @Sendable (V) -> String
+        parse: @escaping @Sendable (String) throws -> V, format: @escaping @Sendable (V) -> String,
+        summary: String
     ) {
         self.key = key
         self.kind = kind
         self.defaultDisplay = defaultDisplay
+        self.summary = summary
         self.keyPath = keyPath
         self.parser = parse
         self.formatter = format
