@@ -103,6 +103,13 @@ output transcribes to stdout.
 [Models](#models)), `--language` (`auto`, or a code; support varies by engine),
 `--translate` / `--no-translate`, `--transcript-format txt|srt|json`.
 
+**Quiet captures**: live transcription segments speech with an on-device VAD
+(Apple Silicon). If phrases are dropped because the input is quiet (low mic/
+system gain), lower the gate with `--vad-threshold` (0–1, default `0.5`; lower =
+catches quieter speech). Segments are also peak-normalized before the engine to
+improve recognition of low-level audio (the recording is unaffected; disable
+with `AURAL_GAIN=off`).
+
 Run `aural --help` for the full list, and `aural help <subcommand>` for a
 subcommand's options.
 
@@ -232,7 +239,8 @@ aural config show
 ```
 
 `AURAL_VAD=0` disables the on-device VAD used for live segmentation (falling
-back to the amplitude `--silence-threshold` method).
+back to the amplitude `--silence-threshold` method); `AURAL_GAIN=off` disables
+per-segment peak normalization of the transcription audio.
 
 The config file is plain JSON and hand-editable; `aural config path` prints its
 location.

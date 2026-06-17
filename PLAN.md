@@ -213,6 +213,7 @@
 - [x] Wired into `LiveTranscriber` behind the abstraction (`LiveTranscriber.swift:51`)
 - [x] Tests: `VadSegmenterTests` (synthetic `ScriptedVAD` — boundary/clock/max/min/trailing-flush) + gated `AURAL_TEST_VAD=1` real-model integration; existing live e2e pinned to `AURAL_VAD=0`
 - [ ] Live-capture e2e of the VAD segmenter (real mic/system) — on the pending-live list (covered offline by the synthetic + gated tests)
+- [x] **Quiet-audio hardening** (diagnosed from `Tests/ManualTests/test3.mp3`, where a quiet phrase peaking ~−45 dBFS was dropped at the VAD gate): lowered the default VAD threshold 0.85→0.5, added `--vad-threshold 0..1`, and per-segment peak normalization (`GainNormalizer`, +20 dB cap, target −3 dBFS) before the engine — recording untouched, `AURAL_GAIN=off` to disable. Gated test replays the recording and confirms the quiet region now segments at 0.5
 
 ### Phase 8.2 — Speaker label data model + output formats
 

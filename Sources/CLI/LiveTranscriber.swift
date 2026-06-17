@@ -47,6 +47,7 @@ final class LiveTranscriber: AudioSink, @unchecked Sendable {
         silenceThresholdDBFS: Double,
         labelName: String,
         resolver: LiveSpeakerResolver? = nil,
+        vadThreshold: Double? = nil,
         pauseSeconds: Double = 0.7,
         maxWindowSeconds: Double = 12,
         minSegmentSeconds: Double = 0.4
@@ -62,8 +63,8 @@ final class LiveTranscriber: AudioSink, @unchecked Sendable {
         self.format = captureFormat
         self.segmenter = SpeechSegmenterFactory.make(
             format: captureFormat, silenceThresholdDBFS: silenceThresholdDBFS,
-            pauseSeconds: pauseSeconds, maxWindowSeconds: maxWindowSeconds,
-            minSegmentSeconds: minSegmentSeconds)
+            vadThreshold: vadThreshold, pauseSeconds: pauseSeconds,
+            maxWindowSeconds: maxWindowSeconds, minSegmentSeconds: minSegmentSeconds)
         self.label = labelName
 
         // The segmenter calls back synchronously on the capture I/O queue;
@@ -87,6 +88,7 @@ final class LiveTranscriber: AudioSink, @unchecked Sendable {
         translate: Bool,
         captureFormat: PCMFormat,
         silenceThresholdDBFS: Double,
+        vadThreshold: Double? = nil,
         pauseSeconds: Double = 0.7,
         maxWindowSeconds: Double = 12,
         minSegmentSeconds: Double = 0.4
@@ -98,7 +100,7 @@ final class LiveTranscriber: AudioSink, @unchecked Sendable {
             backend: backend, writer: writer, ownsBackend: true, ownsWriter: true, speaker: nil,
             language: language, translate: translate, captureFormat: captureFormat,
             silenceThresholdDBFS: silenceThresholdDBFS, labelName: "live transcript -> \(destination.label)",
-            pauseSeconds: pauseSeconds, maxWindowSeconds: maxWindowSeconds,
+            vadThreshold: vadThreshold, pauseSeconds: pauseSeconds, maxWindowSeconds: maxWindowSeconds,
             minSegmentSeconds: minSegmentSeconds)
     }
 
@@ -114,6 +116,7 @@ final class LiveTranscriber: AudioSink, @unchecked Sendable {
         translate: Bool,
         captureFormat: PCMFormat,
         silenceThresholdDBFS: Double,
+        vadThreshold: Double? = nil,
         pauseSeconds: Double = 0.7,
         maxWindowSeconds: Double = 12,
         minSegmentSeconds: Double = 0.4
@@ -122,7 +125,8 @@ final class LiveTranscriber: AudioSink, @unchecked Sendable {
             backend: sharedBackend, writer: sharedWriter, ownsBackend: false, ownsWriter: false,
             speaker: speaker, language: language, translate: translate, captureFormat: captureFormat,
             silenceThresholdDBFS: silenceThresholdDBFS, labelName: "live transcript [\(speaker)]",
-            resolver: resolver, pauseSeconds: pauseSeconds, maxWindowSeconds: maxWindowSeconds,
+            resolver: resolver, vadThreshold: vadThreshold, pauseSeconds: pauseSeconds,
+            maxWindowSeconds: maxWindowSeconds,
             minSegmentSeconds: minSegmentSeconds)
     }
 
@@ -159,8 +163,12 @@ final class LiveTranscriber: AudioSink, @unchecked Sendable {
         let raw = FileManager.default.temporaryDirectory
             .appendingPathComponent("aural-seg-\(UUID().uuidString).wav")
         defer { try? FileManager.default.removeItem(at: raw) }
+        // Boost quiet segments toward a target peak so the engine recognizes
+        // low-level captures (the `-a` recording is unaffected — this only
+        // touches the temp WAV fed to the engine). Disable with AURAL_GAIN=off.
+        let boosted = Self.normalizeGain ? GainNormalizer.normalize(pcm, format: format) : pcm
         let writer = try WAVFileWriter(destination: .file(raw), format: format)
-        try writer.write(pcm)
+        try writer.write(boosted)
         try writer.finalize()
 
         let normalized = try AudioPipeline.normalizeFileForWhisper(raw.path)
@@ -193,6 +201,9 @@ final class LiveTranscriber: AudioSink, @unchecked Sendable {
     }
 
     var bytesWritten: UInt64 { totalBytes }
+
+    /// Whether to peak-normalize segments before the engine (default on).
+    private static var normalizeGain: Bool { GainNormalizer.isEnabled() }
 
     /// whisper.cpp emits placeholder tokens for silence/non-speech segments;
     /// drop them so the transcript holds only recognized speech.

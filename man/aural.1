@@ -166,6 +166,15 @@ Force the audio format, overriding the file extension.
 .TP
 .BI \-\-transcript\-format " txt|srt|json"
 Force the transcript format, overriding the file extension.
+.TP
+.BI \-\-vad\-threshold " 0..1"
+Live VAD speech\-detection sensitivity (default
+.BR 0.5 ).
+Lower catches quieter speech (fewer dropped phrases on low\-level captures);
+higher is stricter. Apple Silicon only; see also
+.B AURAL_VAD
+and
+.BR AURAL_GAIN .
 .SH SPEAKER LABELING
 Label transcript segments with who spoke (PRD \[char167]6.7). Two mechanisms
 combine: deterministic
@@ -323,6 +332,12 @@ to disable the on\-device VAD used for live segmentation (falls back to the
 amplitude
 .B \-\-silence\-threshold
 method).
+.TP
+.B AURAL_GAIN
+Set to
+.B off
+to disable per\-segment peak normalization of the transcription audio (the
+recording is never affected).
 .SH FILES
 .TP
 .I ~/.aural/config.json

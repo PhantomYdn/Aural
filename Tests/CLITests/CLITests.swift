@@ -71,6 +71,8 @@ struct RootParsingTests {
         ["--speaker-threshold", "0.5"],               // needs --speakers
         ["--speakers", "--speaker-threshold", "0"],   // out of (0,1]
         ["--speakers", "--speaker-threshold", "1.5"],  // out of (0,1]
+        ["--vad-threshold", "0"],                      // out of (0,1]
+        ["--vad-threshold", "1.5"],                    // out of (0,1]
     ])
     func rejectsInvalidCombinations(_ arguments: [String]) {
         #expect(throws: (any Error).self) {
@@ -104,6 +106,7 @@ struct RootParsingTests {
         ["--system", "--mix", "--speakers", "--speaker-mode", "source"],
         ["--speakers", "--max-speakers", "3"],
         ["--speakers", "--speaker-threshold", "0.5"],
+        ["--vad-threshold", "0.5"],                             // general live VAD knob
         ["-i", "x.wav", "--speakers"],                          // batch diarization
         ["-i", "x.wav", "--speakers", "--speaker-mode", "acoustic", "--diarize-engine", "offline"],
     ])
@@ -976,6 +979,93 @@ struct StreamingDiarizationTests {
     }
 }
 
+@Suite("Gain normalization")
+struct GainNormalizerTests {
+    private let format = PCMFormat(sampleRate: 16000, bitsPerSample: 16, channels: 1)
+
+    private func pcm16(_ samples: [Int16]) -> Data {
+        var d = Data(capacity: samples.count * 2)
+        for s in samples { withUnsafeBytes(of: s.littleEndian) { d.append(contentsOf: $0) } }
+        return d
+    }
+    private func peak16(_ data: Data) -> Int {
+        stride(from: 0, to: data.count, by: 2).reduce(0) { m, i in
+            let s = Int16(littleEndian: data.subdata(in: i..<(i + 2)).withUnsafeBytes { $0.load(as: Int16.self) })
+            return max(m, abs(Int(s)))
+        }
+    }
+
+    @Test func boostsQuietTowardTargetWithinCap() {
+        // peak 328 ≈ -40 dBFS; target -3 dBFS wants ~70x, but +20 dB cap = 10x.
+        let quiet = pcm16(Array(repeating: 0, count: 0) + [328, -300, 200, -328, 150, -100])
+        let out = GainNormalizer.normalize(quiet, format: format)
+        #expect(peak16(out) > peak16(quiet))      // boosted
+        #expect(peak16(out) <= 3290)               // capped at ~10x (328*10)
+        #expect(peak16(out) >= 3270)               // ~10x applied
+    }
+
+    @Test func leavesLoudUnchanged() {
+        let loud = pcm16([30000, -30000, 25000])   // already above -3 dBFS target
+        #expect(GainNormalizer.normalize(loud, format: format) == loud)
+    }
+
+    @Test func leavesSilenceUnchanged() {
+        let silence = Data(count: 2000)
+        #expect(GainNormalizer.normalize(silence, format: format) == silence)
+    }
+
+    @Test func envOptOut() {
+        #expect(GainNormalizer.isEnabled(environment: ["AURAL_GAIN": "off"]) == false)
+        #expect(GainNormalizer.isEnabled(environment: ["AURAL_GAIN": "OFF"]) == false)
+        #expect(GainNormalizer.isEnabled(environment: [:]) == true)
+    }
+}
+
+/// Gated: replays the committed quiet recording through the real VAD at the
+/// (lowered) default threshold and asserts the previously-dropped quiet phrase
+/// now opens a segment. Runs only with AURAL_TEST_VAD=1 on Apple Silicon.
+@Suite("VAD threshold recovery (integration)")
+struct VadThresholdRecoveryTests {
+    @Test func lowThresholdSegmentsQuietRegion() throws {
+        guard ProcessInfo.processInfo.environment["AURAL_TEST_VAD"] == "1",
+            Platform.isAppleSilicon
+        else { return }
+        let mp3 = "Tests/ManualTests/test3.mp3"
+        guard FileManager.default.fileExists(atPath: mp3) else { return }
+
+        let wav = try AudioPipeline.normalizeFileForWhisper(mp3)  // 16 kHz mono 16-bit
+        defer { try? FileManager.default.removeItem(at: wav) }
+        let handle = try FileHandle(forReadingFrom: wav)
+        _ = try WAVStreamParser.parseHeader { handle.readData(ofLength: $0) }
+        let pcm = handle.readDataToEndOfFile()
+        try handle.close()
+
+        let format = PCMFormat(sampleRate: 16000, bitsPerSample: 16, channels: 1)
+        let byteRate = format.byteRate  // 32000
+        let start = min(pcm.count, 80 * byteRate)
+        let end = min(pcm.count, 94 * byteRate)
+        guard end > start else { return }
+        let slice = pcm.subdata(in: start..<end)  // the quiet dropped region
+
+        let classifier = try FluidVadClassifier.makeLoading(
+            pauseSeconds: 0.7, maxWindowSeconds: 12, threshold: 0.5)
+        let captured = Captured()
+        let segmenter = VadSegmenter(
+            format: format, classifier: classifier, resample: { samples, _ in samples },
+            maxWindowSeconds: 12, minSegmentSeconds: 0.4)
+        segmenter.onSegment = { data, s, e in captured.append((data.count, s, e)) }
+
+        var offset = 0
+        while offset < slice.count {
+            let n = min(8192, slice.count - offset)
+            segmenter.consume(slice.subdata(in: offset..<(offset + n)))
+            offset += n
+        }
+        segmenter.finish()
+        #expect(!captured.all().isEmpty)  // quiet phrase now opens a segment at threshold 0.5
+    }
+}
+
 @Suite("Speaker labels parsing")
 struct SpeakerLabelsParseTests {
     @Test func defaultsAndOverrides() {
@@ -998,7 +1088,7 @@ struct VadIntegrationTests {
             Platform.isAppleSilicon
         else { return }
         let classifier = try FluidVadClassifier.makeLoading(
-            pauseSeconds: 0.7, maxWindowSeconds: 12)
+            pauseSeconds: 0.7, maxWindowSeconds: 12, threshold: 0.5)
         let window = [Float](repeating: 0, count: classifier.windowSamples)
         let box = UncheckedSendableBox(value: classifier)
         _ = try RunLoopBridge.runBlocking(timeout: 60) {

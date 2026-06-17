@@ -135,6 +135,12 @@ struct Aural: ParsableCommand {
         valueName: "dbfs"))
     var silenceThreshold: Double?
 
+    @Option(name: .customLong("vad-threshold"), help: ArgumentHelp(
+        "Live VAD speech-detection sensitivity (0–1; default 0.5). Lower catches quieter "
+            + "speech (fewer dropped phrases); higher is stricter. Apple Silicon only.",
+        valueName: "0..1"))
+    var vadThreshold: Double?
+
     // MARK: Format overrides
 
     @Option(name: .customLong("format"), help: ArgumentHelp(
@@ -356,6 +362,9 @@ struct Aural: ParsableCommand {
         if let silenceThreshold, silenceThreshold >= 0 {
             throw ValidationError("--silence-threshold must be negative (dBFS).")
         }
+        if let vadThreshold, !(vadThreshold > 0 && vadThreshold <= 1) {
+            throw ValidationError("--vad-threshold must be between 0 and 1.")
+        }
 
         // Speaker recognition. The label backends land in Phase 8.3/8.4; here
         // we validate the flag surface so it's stable.
@@ -569,7 +578,8 @@ struct Aural: ParsableCommand {
                 transcriptFormat: transcriptFormat(for: transcriptDest),
                 engineName: settings.engine, modelFlag: model, language: settings.language,
                 translate: settings.translate,
-                captureFormat: format, silenceThresholdDBFS: settings.silenceThreshold)
+                captureFormat: format, silenceThresholdDBFS: settings.silenceThreshold,
+                vadThreshold: vadThreshold)
             sinks.append(transcriber)
             liveTranscriber = transcriber
             if outputs.audio == nil && duration == nil {
@@ -654,11 +664,13 @@ struct Aural: ParsableCommand {
         let micTranscriber = LiveTranscriber(
             sharedWriter: writer, sharedBackend: backend, speaker: labels.you,
             language: settings.language, translate: settings.translate,
-            captureFormat: format, silenceThresholdDBFS: settings.silenceThreshold)
+            captureFormat: format, silenceThresholdDBFS: settings.silenceThreshold,
+            vadThreshold: vadThreshold)
         let systemTranscriber = LiveTranscriber(
             sharedWriter: writer, sharedBackend: backend, speaker: labels.others,
             resolver: systemResolver, language: settings.language, translate: settings.translate,
-            captureFormat: format, silenceThresholdDBFS: settings.silenceThreshold)
+            captureFormat: format, silenceThresholdDBFS: settings.silenceThreshold,
+            vadThreshold: vadThreshold)
 
         let othersDesc = systemResolver != nil ? "Speaker N" : labels.others
         if outputs.audio == nil && duration == nil {
@@ -699,7 +711,7 @@ struct Aural: ParsableCommand {
             backend: backend, writer: writer, ownsBackend: false, ownsWriter: false,
             speaker: nil, language: settings.language, translate: settings.translate,
             captureFormat: format, silenceThresholdDBFS: settings.silenceThreshold,
-            labelName: "live transcript [Speaker N]", resolver: resolver)
+            labelName: "live transcript [Speaker N]", resolver: resolver, vadThreshold: vadThreshold)
 
         if outputs.audio == nil && duration == nil {
             Log.notice("listening (speakers: Speaker N) — press Ctrl+C to stop")

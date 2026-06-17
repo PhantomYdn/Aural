@@ -39,24 +39,31 @@ final class FluidVadClassifier: VoiceActivityStream, @unchecked Sendable {
     /// off the capture I/O thread at `LiveTranscriber` init). Throws if the
     /// model can't be loaded/downloaded so the factory can fall back to
     /// amplitude segmentation.
-    static func makeLoading(pauseSeconds: Double, maxWindowSeconds: Double) throws -> FluidVadClassifier {
-        let manager = try sharedVadManager()
+    /// Default speech-probability gate. Lower than FluidAudio's 0.85 so quieter
+    /// speech still opens a segment (PRD §6.6); tune with `--vad-threshold`.
+    static let defaultThreshold = 0.5
+
+    static func makeLoading(
+        pauseSeconds: Double, maxWindowSeconds: Double, threshold: Double
+    ) throws -> FluidVadClassifier {
+        let manager = try sharedVadManager(threshold: threshold)
         let config = VadSegmentationConfig(
             minSilenceDuration: pauseSeconds, maxSpeechDuration: maxWindowSeconds)
         return FluidVadClassifier(manager: manager, config: config)
     }
 
-    private static func sharedVadManager() throws -> VadManager {
+    private static func sharedVadManager(threshold: Double) throws -> VadManager {
         modelLock.lock()
         defer { modelLock.unlock() }
         if let sharedManager { return sharedManager }
         if FluidAudioCache.isCached(FluidAudioCache.vadBundle) {
-            Log.verbose("loading VAD model")
+            Log.verbose("loading VAD model (threshold \(threshold))")
         } else {
             Log.notice("downloading VAD model (first use)…")
         }
+        let config = VadConfig(defaultThreshold: Float(threshold))
         let manager: VadManager = try RunLoopBridge.runBlocking(timeout: 1800) {
-            try await VadManager()
+            try await VadManager(config: config)
         }
         sharedManager = manager
         return manager
@@ -84,13 +91,15 @@ enum SpeechSegmenterFactory {
     static func make(
         format: PCMFormat,
         silenceThresholdDBFS: Double,
+        vadThreshold: Double?,
         pauseSeconds: Double,
         maxWindowSeconds: Double,
         minSegmentSeconds: Double
     ) -> SpeechSegmenter {
         if vadEnabled(),
             let classifier = try? FluidVadClassifier.makeLoading(
-                pauseSeconds: pauseSeconds, maxWindowSeconds: maxWindowSeconds)
+                pauseSeconds: pauseSeconds, maxWindowSeconds: maxWindowSeconds,
+                threshold: vadThreshold ?? FluidVadClassifier.defaultThreshold)
         {
             Log.verbose("live segmentation: VAD (Silero, FluidAudio)")
             let converter = AudioConverter()
