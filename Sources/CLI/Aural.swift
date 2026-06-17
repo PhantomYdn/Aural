@@ -183,18 +183,19 @@ struct Aural: ParsableCommand {
 
     // MARK: Speaker recognition (PRD §6.7)
 
-    @Flag(name: [.customLong("speakers"), .customLong("diarize")], help: """
+    @Flag(name: [.customLong("speakers"), .customLong("diarize")], inversion: .prefixedNo, help: """
         Label transcript segments by speaker: by capture source ("You" = mic, \
         "Others" = system) and/or acoustic diarization ("Speaker N"). Acoustic \
-        diarization needs Apple Silicon; source attribution works anywhere.
+        diarization needs Apple Silicon; source attribution works anywhere. \
+        Or $AURAL_SPEAKERS / aural config.
         """)
-    var speakers = false
+    var speakers: Bool?
 
     @Option(name: .customLong("speaker-mode"), help: ArgumentHelp(
         "With --speakers: auto (source + diarization), source (mic vs system), "
-            + "or acoustic (diarize one stream).",
+            + "or acoustic (diarize one stream). Or $AURAL_SPEAKER_MODE / config.",
         valueName: "auto|source|acoustic"))
-    var speakerMode: SpeakerMode = .auto
+    var speakerMode: SpeakerMode?
 
     @Option(name: .customLong("speaker-labels"), help: ArgumentHelp(
         "With --speakers: rename the two source labels (default 'You,Others').",
@@ -205,7 +206,7 @@ struct Aural: ParsableCommand {
         "Acoustic diarizer: auto (default: streaming live / offline batch), streaming "
             + "(real-time live), or offline (accurate, diarized at end of capture).",
         valueName: "auto|streaming|offline"))
-    var diarizeEngine: DiarizeEngine = .auto
+    var diarizeEngine: DiarizeEngine?
 
     @Option(name: .customLong("max-speakers"), help: ArgumentHelp(
         "With acoustic diarization: cap the number of distinct speakers.",
@@ -219,6 +220,20 @@ struct Aural: ParsableCommand {
     var speakerThreshold: Double?
 
     // MARK: Advanced
+
+    @Flag(name: .customLong("vad"), inversion: .prefixedNo, help: """
+        Use the on-device VAD for live segmentation (default on, Apple Silicon); \
+        --no-vad falls back to the amplitude --silence-threshold method. Or \
+        $AURAL_VAD / aural config.
+        """)
+    var useVad: Bool?
+
+    @Flag(name: .customLong("gain"), inversion: .prefixedNo, help: """
+        Peak-normalize each segment before the engine to recognize quiet captures \
+        (default on; the recording is unaffected). --no-gain disables. Or \
+        $AURAL_GAIN / aural config.
+        """)
+    var useGain: Bool?
 
     @Flag(name: .customLong("raw"), help: """
         With -a -, stream headerless raw PCM to stdout instead of a WAV \
@@ -366,44 +381,21 @@ struct Aural: ParsableCommand {
             throw ValidationError("--vad-threshold must be between 0 and 1.")
         }
 
-        // Speaker recognition. The label backends land in Phase 8.3/8.4; here
-        // we validate the flag surface so it's stable.
+        // Speaker recognition value formats (flag-level). Cross-cutting checks
+        // that depend on the resolved mode (which may come from env/config) —
+        // e.g. "source needs two sources" — run in `resolveLivePlan`.
         if let maxSpeakers, maxSpeakers < 1 {
             throw ValidationError("--max-speakers must be a positive integer.")
         }
         if let speakerThreshold, !(speakerThreshold > 0 && speakerThreshold <= 1) {
             throw ValidationError("--speaker-threshold must be between 0 and 1.")
         }
-        if !speakers {
-            if speakerMode != .auto {
-                throw ValidationError("--speaker-mode requires --speakers.")
-            }
-            if speakerLabels != nil {
-                throw ValidationError("--speaker-labels requires --speakers.")
-            }
-            if diarizeEngine != .auto {
-                throw ValidationError("--diarize-engine requires --speakers.")
-            }
-            if maxSpeakers != nil {
-                throw ValidationError("--max-speakers requires --speakers.")
-            }
-            if speakerThreshold != nil {
-                throw ValidationError("--speaker-threshold requires --speakers.")
-            }
-        } else {
-            if let speakerLabels {
-                let parts = speakerLabels.split(separator: ",", omittingEmptySubsequences: false)
-                    .map { $0.trimmingCharacters(in: .whitespaces) }
-                if parts.count != 2 || parts.contains(where: \.isEmpty) {
-                    throw ValidationError(
-                        "--speaker-labels needs two comma-separated names, e.g. 'You,Others'.")
-                }
-            }
-            if speakerMode == .source && !(mix && tapMode) {
-                throw ValidationError("""
-                    --speaker-mode source attributes the mic vs the call, so it needs two \
-                    sources: combine --mix with --system/--app/--exclude-app.
-                    """)
+        if let speakerLabels {
+            let parts = speakerLabels.split(separator: ",", omittingEmptySubsequences: false)
+                .map { $0.trimmingCharacters(in: .whitespaces) }
+            if parts.count != 2 || parts.contains(where: \.isEmpty) {
+                throw ValidationError(
+                    "--speaker-labels needs two comma-separated names, e.g. 'You,Others'.")
             }
         }
     }
@@ -426,9 +418,7 @@ struct Aural: ParsableCommand {
     func run() throws {
         Log.isVerbose = options.verbose
         do {
-            let settings = try ResolvedSettings.resolve(
-                engineFlag: engine, languageFlag: language, translateFlag: translate,
-                silenceFlag: silenceThreshold, deviceFlag: device)
+            let settings = try ResolvedSettings.resolve(from: self)
             try settings.validate()
             let outputs = try resolveOutputs()
             if let input {
@@ -508,7 +498,7 @@ struct Aural: ParsableCommand {
 
         // Resolve speaker labeling up front (downgrading to source-only on Intel
         // where acoustic diarization can't run) so it's settled before capture.
-        let speakerPlan = resolveLivePlan()
+        let speakerPlan = try resolveLivePlan(settings: settings)
 
         // Fail fast on an unusable transcription engine before touching audio
         // permissions or starting capture: whisper resolves its binary+model
@@ -521,9 +511,9 @@ struct Aural: ParsableCommand {
         }
 
         let captureEngine = CaptureEngine(
-            deviceUID: settings.micDevice, rate: rate ?? 44100, bits: bits ?? 16,
-            channels: channels, captureSystem: captureSystem, apps: apps,
-            excludeApps: excludeApps, mix: mix, captureBackend: resolvedCaptureBackend())
+            deviceUID: settings.micDevice, rate: settings.rate ?? 44100, bits: settings.bits ?? 16,
+            channels: settings.channels, captureSystem: captureSystem, apps: apps,
+            excludeApps: excludeApps, mix: mix, captureBackend: settings.captureBackend)
         let (session, format, sourceLabel) = try captureEngine.makeCapture()
 
         let metadata = WAVMetadata(
@@ -579,7 +569,7 @@ struct Aural: ParsableCommand {
                 engineName: settings.engine, modelFlag: model, language: settings.language,
                 translate: settings.translate,
                 captureFormat: format, silenceThresholdDBFS: settings.silenceThreshold,
-                vadThreshold: vadThreshold)
+                useVad: settings.useVad, vadThreshold: settings.vadThreshold, useGain: settings.useGain)
             sinks.append(transcriber)
             liveTranscriber = transcriber
             if outputs.audio == nil && duration == nil {
@@ -605,14 +595,20 @@ struct Aural: ParsableCommand {
     /// real time (`--diarize-engine streaming`, default) or as an end-of-capture
     /// offline pass (`--diarize-engine offline`). On Intel (no CoreML diarizer)
     /// diarized modes downgrade to source-only with a notice.
-    private func resolveLivePlan() -> LivePlan {
-        guard speakers else { return .none }
+    private func resolveLivePlan(settings: ResolvedSettings) throws -> LivePlan {
+        guard settings.speakers else { return .none }
         let twoSources = mix && (captureSystem || !apps.isEmpty || !excludeApps.isEmpty)
-        let labels = SpeakerLabels.parse(speakerLabels)
-        let mode: DiarizeMode = diarizeEngine == .offline ? .offline : .streaming
+        let labels = settings.speakerLabels
+        let mode: DiarizeMode = settings.diarizeEngine == .offline ? .offline : .streaming
 
-        if speakerMode == .source {
-            return .sourceOnly(labels)  // two-source requirement validated
+        if settings.speakerMode == .source {
+            guard twoSources else {
+                throw AuralError.usage("""
+                    speaker-mode 'source' attributes the mic vs the call, so it needs two \
+                    sources: combine --mix with --system/--app/--exclude-app.
+                    """)
+            }
+            return .sourceOnly(labels)
         }
         // auto / acoustic want diarization; fall back to source-only on Intel.
         if !Platform.isAppleSilicon {
@@ -631,7 +627,8 @@ struct Aural: ParsableCommand {
     /// (with a notice) if it can't load — callers fall back to a fixed label.
     private func makeStreamingResolver(settings: ResolvedSettings) throws -> LiveSpeakerResolver? {
         do {
-            let diarizer = try StreamingDiarizer.make(maxSpeakers: maxSpeakers, threshold: speakerThreshold)
+            let diarizer = try StreamingDiarizer.make(
+                maxSpeakers: settings.maxSpeakers, threshold: settings.speakerThreshold)
             return ClusteringSpeakerResolver(diarizer)
         } catch let error as AuralError {
             Log.notice("acoustic diarization unavailable (\(error.message)); falling back to a single label.")
@@ -665,12 +662,12 @@ struct Aural: ParsableCommand {
             sharedWriter: writer, sharedBackend: backend, speaker: labels.you,
             language: settings.language, translate: settings.translate,
             captureFormat: format, silenceThresholdDBFS: settings.silenceThreshold,
-            vadThreshold: vadThreshold)
+            useVad: settings.useVad, vadThreshold: settings.vadThreshold, useGain: settings.useGain)
         let systemTranscriber = LiveTranscriber(
             sharedWriter: writer, sharedBackend: backend, speaker: labels.others,
             resolver: systemResolver, language: settings.language, translate: settings.translate,
             captureFormat: format, silenceThresholdDBFS: settings.silenceThreshold,
-            vadThreshold: vadThreshold)
+            useVad: settings.useVad, vadThreshold: settings.vadThreshold, useGain: settings.useGain)
 
         let othersDesc = systemResolver != nil ? "Speaker N" : labels.others
         if outputs.audio == nil && duration == nil {
@@ -711,7 +708,8 @@ struct Aural: ParsableCommand {
             backend: backend, writer: writer, ownsBackend: false, ownsWriter: false,
             speaker: nil, language: settings.language, translate: settings.translate,
             captureFormat: format, silenceThresholdDBFS: settings.silenceThreshold,
-            labelName: "live transcript [Speaker N]", resolver: resolver, vadThreshold: vadThreshold)
+            labelName: "live transcript [Speaker N]", resolver: resolver,
+            useVad: settings.useVad, vadThreshold: settings.vadThreshold, useGain: settings.useGain)
 
         if outputs.audio == nil && duration == nil {
             Log.notice("listening (speakers: Speaker N) — press Ctrl+C to stop")
@@ -812,14 +810,14 @@ struct Aural: ParsableCommand {
             try convert(sourcePath: sourcePath, to: audioDest, settings: settings)
         }
         if let transcriptDest = outputs.transcript {
-            if speakers {
+            if settings.speakers {
                 try runBatchDiarization(
                     audioPath: sourcePath, to: transcriptDest, settings: settings)
             } else {
                 try transcribeAndWrite(
                     audioPath: sourcePath, to: transcriptDest, settings: settings)
             }
-        } else if speakers {
+        } else if settings.speakers {
             throw AuralError.usage(
                 "--speakers labels a transcript; name one with -t FILE (or omit -a).")
         }
@@ -834,15 +832,15 @@ struct Aural: ParsableCommand {
         try TranscriptionEngine.preflight(
             engineName: settings.engine, modelFlag: model,
             language: settings.language, translate: settings.translate)
-        if diarizeEngine == .streaming {
+        if settings.diarizeEngine == .streaming {
             Log.notice(
-                "note: --diarize-engine streaming applies to live capture; using the offline diarizer for files.")
+                "note: diarize-engine streaming applies to live capture; using the offline diarizer for files.")
         }
         let format = transcriptFormat(for: destination)
         let rendered = try BatchDiarization.diarizeAndTranscribe(
             audioPath: audioPath, engineName: settings.engine, modelFlag: model,
             language: settings.language, translate: settings.translate,
-            maxSpeakers: maxSpeakers, threshold: speakerThreshold, format: format)
+            maxSpeakers: settings.maxSpeakers, threshold: settings.speakerThreshold, format: format)
         try TranscribeEngine(
             engineName: settings.engine, modelFlag: model, language: settings.language,
             translate: settings.translate, format: format
@@ -858,9 +856,9 @@ struct Aural: ParsableCommand {
         let sourceFormat = source.processingFormat
         let sourceBits = Int(source.fileFormat.streamDescription.pointee.mBitsPerChannel)
         let pcmFormat = PCMFormat(
-            sampleRate: rate ?? Int(sourceFormat.sampleRate),
-            bitsPerSample: bits ?? ([16, 24, 32].contains(sourceBits) ? sourceBits : 16),
-            channels: channels ?? min(2, max(1, Int(sourceFormat.channelCount)))
+            sampleRate: settings.rate ?? Int(sourceFormat.sampleRate),
+            bitsPerSample: settings.bits ?? ([16, 24, 32].contains(sourceBits) ? sourceBits : 16),
+            channels: settings.channels ?? min(2, max(1, Int(sourceFormat.channelCount)))
         )
         let sink = try makeAudioSink(
             destination, format: pcmFormat, metadata: WAVMetadata(),

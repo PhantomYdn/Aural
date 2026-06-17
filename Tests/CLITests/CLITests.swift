@@ -61,14 +61,8 @@ struct RootParsingTests {
         ["-e", "bogus"],                        // unknown engine
         ["-e", "apple", "--translate"],         // apple cannot translate
         ["--system", "--capture-backend", "bogus", "-a", "x.wav"],  // bad backend
-        ["--speaker-mode", "source"],          // mode needs --speakers
-        ["--speaker-labels", "You,Others"],    // labels need --speakers
-        ["--speakers", "--speaker-mode", "source"],  // source needs two sources
         ["--speakers", "--speaker-labels", "a,b,c"],  // labels must be a pair
-        ["--max-speakers", "2"],                      // needs --speakers
-        ["--diarize-engine", "offline"],              // needs --speakers
         ["--speakers", "--max-speakers", "0"],        // must be positive
-        ["--speaker-threshold", "0.5"],               // needs --speakers
         ["--speakers", "--speaker-threshold", "0"],   // out of (0,1]
         ["--speakers", "--speaker-threshold", "1.5"],  // out of (0,1]
         ["--vad-threshold", "0"],                      // out of (0,1]
@@ -107,6 +101,9 @@ struct RootParsingTests {
         ["--speakers", "--max-speakers", "3"],
         ["--speakers", "--speaker-threshold", "0.5"],
         ["--vad-threshold", "0.5"],                             // general live VAD knob
+        ["--no-speakers"], ["--no-vad"], ["--no-gain"],         // three-state toggles
+        ["--speaker-mode", "source"],                          // companion flags: ignored if speakers off
+        ["--max-speakers", "2"], ["--diarize-engine", "offline"],
         ["-i", "x.wav", "--speakers"],                          // batch diarization
         ["-i", "x.wav", "--speakers", "--speaker-mode", "acoustic", "--diarize-engine", "offline"],
     ])
@@ -585,7 +582,7 @@ struct LiveTranscriptionIntegrationTests {
         let transcriber = try LiveTranscriber(
             destination: .file(outputPath), transcriptFormat: .txt,
             engineName: "whisper", modelFlag: nil, language: "auto", translate: false,
-            captureFormat: header.format, silenceThresholdDBFS: -50,
+            captureFormat: header.format, silenceThresholdDBFS: -50, useVad: false,
             pauseSeconds: 0.5, maxWindowSeconds: 12, minSegmentSeconds: 0.3)
 
         // Feed the speech in 0.25 s chunks, then a 0.6 s pause to close the
@@ -839,7 +836,7 @@ struct SourceAttributionTests {
             LiveTranscriber(
                 sharedWriter: writer, sharedBackend: backend, speaker: speaker,
                 language: nil, translate: false, captureFormat: format,
-                silenceThresholdDBFS: -50, pauseSeconds: 0.5, maxWindowSeconds: 2,
+                silenceThresholdDBFS: -50, useVad: false, pauseSeconds: 0.5, maxWindowSeconds: 2,
                 minSegmentSeconds: 0.2)
         }
         let you = makeSource("You")
@@ -967,7 +964,7 @@ struct StreamingDiarizationTests {
             backend: backend, writer: writer, ownsBackend: false, ownsWriter: false,
             speaker: "Others", language: nil, translate: false, captureFormat: format,
             silenceThresholdDBFS: -50, labelName: "t", resolver: FixedResolver("Speaker 2"),
-            pauseSeconds: 0.5, maxWindowSeconds: 2, minSegmentSeconds: 0.2)
+            useVad: false, pauseSeconds: 0.5, maxWindowSeconds: 2, minSegmentSeconds: 0.2)
 
         try transcriber.write(loud(0.5)); try transcriber.write(quiet(0.5))
         try transcriber.finalize(); try transcriber.rethrowErrors()

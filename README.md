@@ -223,24 +223,41 @@ engines also auto-download on first use, so an explicit download is optional.
 Most defaults resolve **flag › environment (`$AURAL_*`) › config
 (`~/.aural/config.json`) › built-in**:
 
-| Setting | Flag | Env var | Config key | Default |
-|---------|------|---------|------------|---------|
-| model | `--model` | `$AURAL_WHISPER_MODEL` | `model` | (required for whisper) |
-| engine | `-e/--engine` | `$AURAL_ENGINE` | `engine` | `whisper` |
-| language | `--language` | `$AURAL_LANGUAGE` | `language` | `auto` |
-| translate | `--translate`/`--no-translate` | `$AURAL_TRANSLATE` | `translate` | `false` |
-| silence threshold | `--silence-threshold` | `$AURAL_SILENCE_THRESHOLD` | `silence-threshold` | `-50` |
-| input device | `-d/--device` | `$AURAL_DEVICE` | `device` | system default |
+Every setting has a flag, a `$AURAL_*` env var, and a config key. The env var
+is `AURAL_<KEY>` (uppercased, `-`→`_`) except `model` (`$AURAL_WHISPER_MODEL`)
+and `capture-backend` (`$AURAL_CAPTURE`).
+
+| Config key | Flag | Default |
+|------------|------|---------|
+| `engine` | `-e/--engine` | `whisper` |
+| `model` | `--model` | (required for whisper) |
+| `language` | `--language` | `auto` |
+| `translate` | `--translate`/`--no-translate` | `false` |
+| `device` | `-d/--device` | system default |
+| `capture-backend` | `--capture-backend` | `auto` |
+| `rate` / `bits` / `channels` | `-r` / `-b` / `-c` | live `44100`/`16`; convert = source |
+| `silence-threshold` | `--silence-threshold` | `-50` |
+| `vad` | `--vad`/`--no-vad` | `true` |
+| `vad-threshold` | `--vad-threshold` | `0.5` |
+| `gain` | `--gain`/`--no-gain` | `true` |
+| `speakers` | `--speakers`/`--no-speakers` | `false` |
+| `speaker-mode` | `--speaker-mode` | `auto` |
+| `speaker-labels` | `--speaker-labels` | `You,Others` |
+| `diarize-engine` | `--diarize-engine` | `auto` |
+| `max-speakers` | `--max-speakers` | (unset) |
+| `speaker-threshold` | `--speaker-threshold` | (engine default) |
 
 ```sh
 aural config set engine apple
 aural config set silence-threshold -40   # values starting with '-' are taken verbatim
-aural config show
+aural config set speaker-mode source
+aural config show                        # every setting, its value, and its SOURCE
 ```
 
-`AURAL_VAD=0` disables the on-device VAD used for live segmentation (falling
-back to the amplitude `--silence-threshold` method); `AURAL_GAIN=off` disables
-per-segment peak normalization of the transcription audio.
+`aural config show` lists **all** settings with their effective value and a
+`SOURCE` column — `default` (built-in), `config` (set in the file), or `env`
+(an `$AURAL_*` override, which outranks config). `--json` emits
+`{ "<key>": { "value": …, "source": … } }`.
 
 The config file is plain JSON and hand-editable; `aural config path` prints its
 location.

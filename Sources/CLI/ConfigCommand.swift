@@ -18,7 +18,20 @@ struct Config: ParsableCommand {
 
 struct ConfigShow: ParsableCommand {
     static let configuration = CommandConfiguration(
-        commandName: "show", abstract: "Print the current configuration.")
+        commandName: "show",
+        abstract: "Print every setting, its effective value, and its source.",
+        discussion: """
+            Shows all settings — including ones at their built-in default. SOURCE \
+            is 'default' (built-in), 'config' (set in ~/.aural/config.json), or \
+            'env' ($AURAL_* override, which outranks config). Invocation flags are \
+            not shown here (they apply per run and outrank both).
+            """)
+
+    /// One row of `config show` (also the `--json` element shape).
+    struct Entry: Encodable {
+        let value: String
+        let source: String
+    }
 
     @Flag(help: "Output as JSON for scripting.")
     var json = false
@@ -28,18 +41,18 @@ struct ConfigShow: ParsableCommand {
     func run() throws {
         try runMapped(verbose: options.verbose) {
             let config = Configuration.load()
+            let environment = ProcessInfo.processInfo.environment
+            let resolved = Configuration.settings.map { setting -> (key: String, entry: Entry) in
+                let (value, source) = setting.effective(config: config, env: environment)
+                return (setting.key.rawValue, Entry(value: value, source: source.rawValue))
+            }
             if json {
-                print(try OutputFormatting.json(config))
+                let object = Dictionary(uniqueKeysWithValues: resolved.map { ($0.key, $0.entry) })
+                print(try OutputFormatting.json(object))
                 return
             }
-            let entries = config.entries()
-            guard !entries.isEmpty else {
-                print("no configuration set (\(Configuration.fileURL.path))")
-                print("set a default model with: aural config set model base.en")
-                return
-            }
-            let rows = entries.map { [$0.key, $0.value] }
-            print(OutputFormatting.table(header: ["KEY", "VALUE"], rows: rows))
+            let rows = resolved.map { [$0.key, $0.entry.value, $0.entry.source] }
+            print(OutputFormatting.table(header: ["KEY", "VALUE", "SOURCE"], rows: rows))
         }
     }
 }

@@ -20,6 +20,7 @@ final class LiveTranscriber: AudioSink, @unchecked Sendable {
     private let segmenter: SpeechSegmenter
     private let speaker: String?
     private let resolver: LiveSpeakerResolver?
+    private let useGain: Bool
     private let ownsBackend: Bool
     private let ownsWriter: Bool
 
@@ -47,7 +48,9 @@ final class LiveTranscriber: AudioSink, @unchecked Sendable {
         silenceThresholdDBFS: Double,
         labelName: String,
         resolver: LiveSpeakerResolver? = nil,
+        useVad: Bool = true,
         vadThreshold: Double? = nil,
+        useGain: Bool = true,
         pauseSeconds: Double = 0.7,
         maxWindowSeconds: Double = 12,
         minSegmentSeconds: Double = 0.4
@@ -58,12 +61,13 @@ final class LiveTranscriber: AudioSink, @unchecked Sendable {
         self.ownsWriter = ownsWriter
         self.speaker = speaker
         self.resolver = resolver
+        self.useGain = useGain
         self.language = language
         self.translate = translate
         self.format = captureFormat
         self.segmenter = SpeechSegmenterFactory.make(
             format: captureFormat, silenceThresholdDBFS: silenceThresholdDBFS,
-            vadThreshold: vadThreshold, pauseSeconds: pauseSeconds,
+            useVad: useVad, vadThreshold: vadThreshold, pauseSeconds: pauseSeconds,
             maxWindowSeconds: maxWindowSeconds, minSegmentSeconds: minSegmentSeconds)
         self.label = labelName
 
@@ -88,7 +92,9 @@ final class LiveTranscriber: AudioSink, @unchecked Sendable {
         translate: Bool,
         captureFormat: PCMFormat,
         silenceThresholdDBFS: Double,
+        useVad: Bool = true,
         vadThreshold: Double? = nil,
+        useGain: Bool = true,
         pauseSeconds: Double = 0.7,
         maxWindowSeconds: Double = 12,
         minSegmentSeconds: Double = 0.4
@@ -100,8 +106,8 @@ final class LiveTranscriber: AudioSink, @unchecked Sendable {
             backend: backend, writer: writer, ownsBackend: true, ownsWriter: true, speaker: nil,
             language: language, translate: translate, captureFormat: captureFormat,
             silenceThresholdDBFS: silenceThresholdDBFS, labelName: "live transcript -> \(destination.label)",
-            vadThreshold: vadThreshold, pauseSeconds: pauseSeconds, maxWindowSeconds: maxWindowSeconds,
-            minSegmentSeconds: minSegmentSeconds)
+            useVad: useVad, vadThreshold: vadThreshold, useGain: useGain, pauseSeconds: pauseSeconds,
+            maxWindowSeconds: maxWindowSeconds, minSegmentSeconds: minSegmentSeconds)
     }
 
     /// Source-attribution convenience: shares an engine + transcript writer with
@@ -116,7 +122,9 @@ final class LiveTranscriber: AudioSink, @unchecked Sendable {
         translate: Bool,
         captureFormat: PCMFormat,
         silenceThresholdDBFS: Double,
+        useVad: Bool = true,
         vadThreshold: Double? = nil,
+        useGain: Bool = true,
         pauseSeconds: Double = 0.7,
         maxWindowSeconds: Double = 12,
         minSegmentSeconds: Double = 0.4
@@ -125,8 +133,8 @@ final class LiveTranscriber: AudioSink, @unchecked Sendable {
             backend: sharedBackend, writer: sharedWriter, ownsBackend: false, ownsWriter: false,
             speaker: speaker, language: language, translate: translate, captureFormat: captureFormat,
             silenceThresholdDBFS: silenceThresholdDBFS, labelName: "live transcript [\(speaker)]",
-            resolver: resolver, vadThreshold: vadThreshold, pauseSeconds: pauseSeconds,
-            maxWindowSeconds: maxWindowSeconds,
+            resolver: resolver, useVad: useVad, vadThreshold: vadThreshold, useGain: useGain,
+            pauseSeconds: pauseSeconds, maxWindowSeconds: maxWindowSeconds,
             minSegmentSeconds: minSegmentSeconds)
     }
 
@@ -166,7 +174,7 @@ final class LiveTranscriber: AudioSink, @unchecked Sendable {
         // Boost quiet segments toward a target peak so the engine recognizes
         // low-level captures (the `-a` recording is unaffected — this only
         // touches the temp WAV fed to the engine). Disable with AURAL_GAIN=off.
-        let boosted = Self.normalizeGain ? GainNormalizer.normalize(pcm, format: format) : pcm
+        let boosted = useGain ? GainNormalizer.normalize(pcm, format: format) : pcm
         let writer = try WAVFileWriter(destination: .file(raw), format: format)
         try writer.write(boosted)
         try writer.finalize()
@@ -201,9 +209,6 @@ final class LiveTranscriber: AudioSink, @unchecked Sendable {
     }
 
     var bytesWritten: UInt64 { totalBytes }
-
-    /// Whether to peak-normalize segments before the engine (default on).
-    private static var normalizeGain: Bool { GainNormalizer.isEnabled() }
 
     /// whisper.cpp emits placeholder tokens for silence/non-speech segments;
     /// drop them so the transcript holds only recognized speech.

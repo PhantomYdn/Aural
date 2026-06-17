@@ -91,12 +91,13 @@ enum SpeechSegmenterFactory {
     static func make(
         format: PCMFormat,
         silenceThresholdDBFS: Double,
+        useVad: Bool,
         vadThreshold: Double?,
         pauseSeconds: Double,
         maxWindowSeconds: Double,
         minSegmentSeconds: Double
     ) -> SpeechSegmenter {
-        if vadEnabled(),
+        if useVad, Platform.isAppleSilicon,
             let classifier = try? FluidVadClassifier.makeLoading(
                 pauseSeconds: pauseSeconds, maxWindowSeconds: maxWindowSeconds,
                 threshold: vadThreshold ?? FluidVadClassifier.defaultThreshold)
@@ -115,13 +116,5 @@ enum SpeechSegmenterFactory {
             format: format, silenceThresholdDBFS: silenceThresholdDBFS,
             pauseSeconds: pauseSeconds, maxWindowSeconds: maxWindowSeconds,
             minSegmentSeconds: minSegmentSeconds)
-    }
-
-    /// VAD is the default live segmenter when available. Disable with
-    /// `AURAL_VAD=0`; Intel falls back to amplitude (CoreML/ANE is
-    /// Apple-Silicon-first, like whisperkit/parakeet).
-    static func vadEnabled() -> Bool {
-        if ProcessInfo.processInfo.environment["AURAL_VAD"] == "0" { return false }
-        return Platform.isAppleSilicon
     }
 }

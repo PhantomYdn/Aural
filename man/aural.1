@@ -171,10 +171,18 @@ Force the transcript format, overriding the file extension.
 Live VAD speech\-detection sensitivity (default
 .BR 0.5 ).
 Lower catches quieter speech (fewer dropped phrases on low\-level captures);
-higher is stricter. Apple Silicon only; see also
-.B AURAL_VAD
-and
-.BR AURAL_GAIN .
+higher is stricter. Apple Silicon only.
+.TP
+.BR \-\-vad ", " \-\-no\-vad
+Use the on\-device VAD for live segmentation (default on, Apple Silicon);
+.B \-\-no\-vad
+falls back to the amplitude
+.B \-\-silence\-threshold
+method.
+.TP
+.BR \-\-gain ", " \-\-no\-gain
+Peak\-normalize each segment before the engine to recognize quiet captures
+(default on; the recording is unaffected).
 .SH SPEAKER LABELING
 Label transcript segments with who spoke (PRD \[char167]6.7). Two mechanisms
 combine: deterministic
@@ -197,8 +205,10 @@ json a
 .B speaker
 field.
 .TP
-.BR \-\-speakers ", " \-\-diarize
-Enable speaker labels (off by default). A meeting capture
+.BR \-\-speakers ", " \-\-diarize ", " \-\-no\-speakers
+Enable speaker labels (off by default; or
+.B $AURAL_SPEAKERS
+/ config). A meeting capture
 .RB ( \-\-mix
 with
 .BR \-\-system / \-\-app )
@@ -291,7 +301,21 @@ Use
 for a subcommand's full options.
 .SH ENVIRONMENT
 Most defaults resolve flag, then environment, then config, then a built\-in
-default.
+default. Every config key (see
+.BR "aural config show" )
+has a matching variable
+.BR AURAL_<KEY> ,
+uppercased with
+.B \-
+mapped to
+.BR _ ,
+except
+.B model
+.RB ( AURAL_WHISPER_MODEL )
+and
+.B capture\-backend
+.RB ( AURAL_CAPTURE ).
+The common ones:
 .TP
 .B AURAL_WHISPER_MODEL
 Default ggml model (path or short name).

@@ -63,11 +63,46 @@ struct ConfigurationTests {
     @Test func roundTripsAllKeys() throws {
         let url = tempURL()
         defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
-        let config = Configuration(
-            model: "large-v3-turbo", engine: "whisper", language: "de",
-            translate: true, silenceThreshold: -42, device: "MicUID")
+        var config = Configuration()
+        for key in ConfigKey.allCases {
+            // A value valid for each key's type.
+            let raw: String
+            switch key {
+            case .engine: raw = "whisper"
+            case .model, .language, .device: raw = "x"
+            case .translate, .vad, .gain, .speakers: raw = "true"
+            case .captureBackend: raw = "sckit"
+            case .rate: raw = "48000"
+            case .bits: raw = "24"
+            case .channels: raw = "1"
+            case .silenceThreshold: raw = "-42"
+            case .vadThreshold, .speakerThreshold: raw = "0.6"
+            case .speakerMode: raw = "source"
+            case .speakerLabels: raw = "Me,Them"
+            case .diarizeEngine: raw = "offline"
+            case .maxSpeakers: raw = "5"
+            }
+            try config.set(key, rawValue: raw)
+        }
         try config.save(to: url)
         #expect(Configuration.load(from: url) == config)
+        // Every key is now set, so entries() covers them all.
+        #expect(config.entries().count == ConfigKey.allCases.count)
+    }
+
+    @Test func showResolvesValueAndSource() {
+        var config = Configuration()
+        config.engine = "parakeet"
+        let env = ["AURAL_VAD_THRESHOLD": "0.4"]
+        func effective(_ key: ConfigKey) -> (value: String, source: SettingSource) {
+            Configuration.settingsByKey[key]!.effective(config: config, env: env)
+        }
+        #expect(effective(.engine) == ("parakeet", .config))
+        #expect(effective(.vadThreshold) == ("0.4", .env))
+        #expect(effective(.language) == ("auto", .default))
+        #expect(effective(.channels) == ("(auto)", .default))
+        // The registry and the key enum stay in sync.
+        #expect(Configuration.settings.count == ConfigKey.allCases.count)
     }
 
     @Test func jsonUsesKebabCaseKeys() throws {

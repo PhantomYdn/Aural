@@ -20,7 +20,7 @@ enum DiarizeEngine: String, CaseIterable, ExpressibleByArgument {
 
 /// The two source-attribution labels (mic vs system). Defaults to You/Others;
 /// overridden by `--speaker-labels "You,Others"` (validated as a pair).
-struct SpeakerLabels {
+struct SpeakerLabels: Equatable {
     let you: String
     let others: String
 
