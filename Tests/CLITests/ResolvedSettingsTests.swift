@@ -132,4 +132,43 @@ struct ResolvedSettingsTests {
         config.translate = true  // whisper supports translate
         try settings(config: config).validate()
     }
+
+    @Test func directoryResolvesFlagEnvConfigDefault() throws {
+        #expect(try settings().directory == nil)  // default: process CWD (nil)
+
+        var config = Configuration(); config.directory = "/cfg"
+        #expect(try settings(config: config).directory == "/cfg")
+
+        // env outranks config; flag outranks env.
+        #expect(try settings(env: ["AURAL_DIRECTORY": "/env"], config: config).directory == "/env")
+        #expect(
+            try settings(["-C", "/flag"], env: ["AURAL_DIRECTORY": "/env"], config: config)
+                .directory == "/flag")
+    }
+
+    @Test func applyWorkingDirectoryValidatesExistence() throws {
+        // Missing directory is a usage error; nil is a no-op.
+        var missing = ResolvedSettings.resolveForTest()
+        missing = missing.with(directory: "/no/such/dir/aural")
+        #expect(throws: AuralError.self) { try missing.applyWorkingDirectory() }
+        try ResolvedSettings.resolveForTest().applyWorkingDirectory()  // nil → no-op, no throw
+    }
+}
+
+extension ResolvedSettings {
+    /// Minimal all-defaults instance for unit tests.
+    static func resolveForTest() -> ResolvedSettings {
+        try! ResolvedSettings.resolve(from: try! Aural.parse([]), environment: [:], config: Configuration())
+    }
+
+    /// Copy with a different working directory (test helper).
+    func with(directory: String?) -> ResolvedSettings {
+        ResolvedSettings(
+            engine: engine, language: language, translate: translate, micDevice: micDevice,
+            directory: directory, captureBackend: captureBackend, rate: rate, bits: bits,
+            channels: channels, silenceThreshold: silenceThreshold, useVad: useVad,
+            vadThreshold: vadThreshold, useGain: useGain, speakers: speakers,
+            speakerMode: speakerMode, speakerLabels: speakerLabels, diarizeEngine: diarizeEngine,
+            maxSpeakers: maxSpeakers, speakerThreshold: speakerThreshold)
+    }
 }

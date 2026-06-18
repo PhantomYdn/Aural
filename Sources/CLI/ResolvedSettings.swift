@@ -12,6 +12,8 @@ struct ResolvedSettings: Equatable {
     let language: String
     let translate: Bool
     let micDevice: String?
+    /// Working directory for resolving relative artifact paths (nil = process CWD).
+    let directory: String?
 
     let captureBackend: String
     // Capture format: nil = contextual (live uses 44100/16; convert uses source).
@@ -70,6 +72,7 @@ struct ResolvedSettings: Equatable {
         let language = string(a.language, .language, config.language, default: "auto")!
         let translate = try bool(a.translate, .translate, config.translate, default: false)
         let micDevice = string(a.device, .device, config.device)
+        let directory = string(a.directory, .directory, config.directory)
 
         let captureBackend = try ConfigKey.parseChoice(
             string(a.captureBackend, .captureBackend, config.captureBackend, default: "auto")!,
@@ -111,6 +114,7 @@ struct ResolvedSettings: Equatable {
 
         return ResolvedSettings(
             engine: engine, language: language, translate: translate, micDevice: micDevice,
+            directory: directory,
             captureBackend: captureBackend, rate: rate, bits: bits, channels: channels,
             silenceThreshold: silenceThreshold, useVad: useVad, vadThreshold: vadThreshold,
             useGain: useGain, speakers: speakers, speakerMode: speakerMode,
@@ -132,5 +136,23 @@ struct ResolvedSettings: Equatable {
         guard silenceThreshold < 0 else {
             throw AuralError.usage("silence threshold must be negative (dBFS).")
         }
+    }
+
+    /// Changes the process working directory so the root verb's **relative**
+    /// artifact paths (`-i`, `-a`, `-t`, `--split` outputs) resolve against it.
+    /// Absolute paths, `-` (stdin/stdout), and home-anchored state (`~/.aural`)
+    /// are unaffected. No-op when unset (stays at the process CWD). A missing
+    /// directory is a usage error; Aural never creates it.
+    func applyWorkingDirectory(fileManager: FileManager = .default) throws {
+        guard let directory else { return }
+        let path = (directory as NSString).expandingTildeInPath
+        var isDir: ObjCBool = false
+        guard fileManager.fileExists(atPath: path, isDirectory: &isDir), isDir.boolValue else {
+            throw AuralError.usage("--directory must be an existing directory (got '\(directory)').")
+        }
+        guard fileManager.changeCurrentDirectoryPath(path) else {
+            throw AuralError.ioError("could not switch to directory '\(directory)'.")
+        }
+        Log.verbose("working directory: \(path)")
     }
 }

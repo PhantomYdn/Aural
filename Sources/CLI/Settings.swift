@@ -92,6 +92,7 @@ enum ConfigKey: String, CaseIterable {
     case language
     case translate
     case device
+    case directory
     case captureBackend = "capture-backend"
     case rate
     case bits
@@ -124,6 +125,18 @@ enum ConfigKey: String, CaseIterable {
     static func requireNonEmpty(_ value: String, _ key: ConfigKey) throws -> String {
         guard !value.isEmpty else { throw AuralError.usage("\(key.rawValue) must not be empty.") }
         return value
+    }
+
+    /// Validates a path is an existing directory (tilde-expanded). Used by the
+    /// `directory` working-directory setting; the value is stored verbatim.
+    static func parseDirectory(_ value: String, _ key: ConfigKey) throws -> String {
+        let trimmed = try requireNonEmpty(value, key)
+        var isDir: ObjCBool = false
+        let path = (trimmed as NSString).expandingTildeInPath
+        guard FileManager.default.fileExists(atPath: path, isDirectory: &isDir), isDir.boolValue else {
+            throw AuralError.usage("\(key.rawValue) must be an existing directory (got '\(value)').")
+        }
+        return trimmed
     }
 
     static func parseEngine(_ value: String) throws -> String {

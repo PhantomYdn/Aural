@@ -17,6 +17,9 @@ struct Configuration: Codable, Equatable {
     var translate: Bool?
     var device: String?
 
+    // General
+    var directory: String?
+
     // Capture
     var captureBackend: String?
     var rate: Int?
@@ -41,6 +44,7 @@ struct Configuration: Codable, Equatable {
     /// hand-editable with familiar names.
     enum CodingKeys: String, CodingKey {
         case model, engine, language, translate, device
+        case directory
         case captureBackend = "capture-backend"
         case rate, bits, channels
         case silenceThreshold = "silence-threshold"
@@ -109,6 +113,9 @@ struct Configuration: Codable, Equatable {
         TypedSetting(.device, .string, "(system default)", \.device,
             parse: { try ConfigKey.requireNonEmpty($0, .device) }, format: { $0 },
             summary: "Input device for capture (defaults to system input)."),
+        TypedSetting(.directory, .string, "(current directory)", \.directory,
+            parse: { try ConfigKey.parseDirectory($0, .directory) }, format: { $0 },
+            summary: "Base directory for relative artifact paths (-i/-a/-t/--split)."),
 
         TypedSetting(.captureBackend, .choice(["auto", "sckit", "coreaudio"]), "auto", \.captureBackend,
             parse: { try ConfigKey.parseChoice($0, .captureBackend, ["auto", "sckit", "coreaudio"]) },

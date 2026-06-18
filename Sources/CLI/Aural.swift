@@ -61,6 +61,13 @@ struct Aural: ParsableCommand {
         valueName: "uid"))
     var device: String?
 
+    @Option(name: [.customShort("C"), .customLong("directory")], help: ArgumentHelp(
+        "Base directory for resolving relative artifact paths (-i/-a/-t and --split outputs); "
+            + "absolute paths and '-' are unaffected. Defaults to the current directory "
+            + "(or $AURAL_DIRECTORY / aural config). Must exist.",
+        valueName: "path"))
+    var directory: String?
+
     @Flag(name: .customLong("system"), help: """
         Live: capture all system audio via a Core Audio process tap instead \
         of the microphone.
@@ -423,6 +430,7 @@ struct Aural: ParsableCommand {
         do {
             let settings = try ResolvedSettings.resolve(from: self)
             try settings.validate()
+            try settings.applyWorkingDirectory()
             let outputs = try resolveOutputs()
             if let input {
                 try runFileInput(input, outputs: outputs, settings: settings)
