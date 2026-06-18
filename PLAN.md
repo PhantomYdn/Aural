@@ -6,8 +6,6 @@
 
 > Unscheduled items. Add new work here; `/plan` will triage on next run.
 
-- [x] Leaf-subcommand `--help`: the broad symptom was a zsh test artifact (an unquoted `$var` holding `"models list"` is passed as one argument, so aural shows root help) — `aural models list --help` etc. work directly (also helped by the argument-parser 1.8.2 bump). The one real case, `aural config set --help`, was swallowed by `.captureForPassthrough` (used for `-40` values); fixed via `ConfigSet.isHelpRequest` → `CleanExit.helpRequest`. Stale man BUGS note removed.
-
 ## Phase 1: Project Foundation & Core Capture (PRD M1)
 
 - [x] Initialize git repository with `.gitignore` for Swift/SwiftPM
@@ -260,7 +258,9 @@
 - [x] `aural models list` (local) shows the FluidAudio cache correctly: `FluidAudioCache.engine(forBundle:)` classifies each bundle (`*parakeet*` → parakeet; `silero-vad`/`speaker-diarization` → fluidaudio), and `coreMLModels` flags the configured CoreML default as `current` (so `parakeet-tdt-0.6b-v3` gets `*`); a no-default hint prints when nothing resolves
 - [x] **Model-load UX fix:** VAD loads once per process (shared static `VadManager`, shared across the two source-attribution streams; per-stream state); cached loads are silent (`Log.verbose`), with a one-time `downloading … (first use)` notice only on a real fetch — replacing the misleading per-run "preparing … (first run may download)" notice. (FluidAudio's own INFO logging is DEBUG-only; release stderr is clean.)
 - [x] **Config parity + `config show` redesign** (declarative settings registry): every meaningful parameter is now flag↔`$AURAL_*`↔config with `ResolvedSettings` precedence (flag › env › config › default). New config keys: `capture-backend`, `rate`/`bits`/`channels`, `vad`, `vad-threshold`, `gain`, `speakers`, `speaker-mode`, `speaker-labels`, `diarize-engine`, `max-speakers`, `speaker-threshold`. Bool flags are now three-state (`--vad/--no-vad`, `--gain/--no-gain`, `--speakers/--no-speakers`) so config can supply a default. `aural config show` lists **all** settings with VALUE + SOURCE (`default`/`config`/`env`); `--json` → `{key:{value,source}}`. `Setting`/`TypedSetting` registry (`Settings.swift`) drives show/set/unset/resolve from one descriptor per key
+- [x] **`config show` DESCRIPTION column**: each setting carries a one-sentence `summary` in the registry; `config show` renders it as a fourth column and `--json` gains a `description` field per key
 - [x] Tests: catalog parse (`fluidaudio:` tags + `available()` coverage)
+- [x] Leaf-subcommand `--help`: the broad symptom was a zsh test artifact (an unquoted `$var` holding `"models list"` is passed as one argument, so aural shows root help) — `aural models list --help` etc. work directly (also helped by the argument-parser 1.8.2 bump). The one real case, `aural config set --help`, was swallowed by `.captureForPassthrough` (used for `-40` values); fixed via `ConfigSet.isHelpRequest` → `CleanExit.helpRequest`. Stale man BUGS note removed.
 
 ### Phase 8.7 — Validation & user-facing docs
 
@@ -290,6 +290,18 @@
 - [x] Gated `say` ground-truth test (`SayDiarizationTests`, `AURAL_TEST_DIARIZE=1`): single speaker stays one, two distinct voices separate with a stable 1:1 mapping — validates the zero-config default end-to-end (minus TCC capture)
 - [ ] Real-call e2e (TCC capture front-end) remains on the pending-live list; streaming RTF measured ≪ 1 (≈0.01) via the harness
 
+## Phase 9: Working directory for artifacts (PRD Feature 20 / §6.1)
+
+> A git-`-C`-style base directory for resolving **relative** artifact paths,
+> defaulting to the process CWD. Foundation for headless/remote operation.
+
+- [ ] Add the `directory` config setting: registry entry (`Configuration`/`Settings`) with a `config show` summary/DESCRIPTION; env var `$AURAL_DIRECTORY`; `ResolvedSettings` precedence flag › env › config › CWD
+- [ ] Add the `--directory`/`-C PATH` root option (ArgumentParser); validate the path is an existing directory (usage error otherwise; never auto-create)
+- [ ] Resolve **relative** root-verb artifact paths against the working directory — `-i`, `-a`, `-t`, and `--split` outputs — leaving absolute paths, `-` (stdin/stdout), and Aural's own state (`~/.aural/…` config + models) untouched. Subcommand positionals (e.g. `info <file>`) keep using the process CWD for now
+- [ ] Add the precedence-table row to docs + `config show` (working directory → `--directory`/`-C` › `$AURAL_DIRECTORY` › `directory` › CWD)
+- [ ] Tests: precedence resolution (flag/env/config/default); relative paths rebased vs absolute untouched; `-`/stdin/stdout unaffected; missing-directory usage error
+- [ ] Docs: README + man (`--directory`/`-C`, `$AURAL_DIRECTORY`, config key `directory`); note it as the remote-control foundation (PRD §4.2)
+
 ## Future
 
 > Nice-to-have items outside current scope.
@@ -305,3 +317,4 @@
 - [ ] Silence-based voice activity detection for trimming
 - [ ] Named speaker identification: voiceprint enrollment + local speaker store (FluidAudio embeddings) (PRD §4.2 / Open Q5)
 - [ ] Overlapping-speech handling / per-word speaker assignment (PRD Open Q6)
+- [ ] Remote control: control Aural from another process/host (start/stop/configure captures); the working `directory` anchors control/state artifacts (PRD §4.2 / Open Q9)

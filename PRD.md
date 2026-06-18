@@ -61,10 +61,12 @@ The tool strictly follows Unix/Linux design patterns, treating audio as a stream
 | 17 | VAD-based live segmentation | P1 | Replace amplitude/silence-threshold segment cutting with Silero VAD (FluidAudio) for stable speech/pause boundaries at runtime; graceful fallback to the existing amplitude method when VAD models are unavailable. Feeds both transcription and the speaker pipeline. |
 | 18 | Combined source-split + per-source diarization | P2 | Label You (mic) plus each distinct remote participant (diarize the system track) so multi-party calls resolve both sides at once. |
 | 19 | Named speaker identification (enrolled voiceprints) | Post-MVP | Match voices to named people via stored speaker embeddings; enrollment + a local voiceprint store (FluidAudio embedding extraction). |
+| 20 | Working directory for artifacts | P1 | A base directory for resolving **relative** input/output paths (`-i`, `-a`, `-t`, and `--split` outputs), defaulting to the current working directory and overridable via `--directory`/`-C`, `$AURAL_DIRECTORY`, or config `directory`. Absolute paths and `-` (stdin/stdout) are unaffected; the directory must exist. Foundation for headless/remote operation (see §4.2). |
 
 ### 4.2 Post-MVP Features (Future)
 
 - **Daemon/agent mode**: launchd-managed background service for scheduled and unattended recording, with IPC for client commands.
+- **Remote control**: control Aural from another process or host (start/stop/configure captures); the shared working `directory` (§6.1) anchors control/state artifacts.
 - **Silence-based voice activity detection** for trimming.
 - **Real-time streaming** to a network socket or HTTP endpoint.
 - **Multi-channel mapping** (e.g., separate tracks for mic and system audio).
@@ -166,6 +168,9 @@ aural models | config                    # model + default management
 - *(no output flag)* : transcribe to stdout (the default verb).
 - At most one output may be `-` — stdout carries a single stream.
 
+**Working directory:**
+- `--directory, -C PATH` : base directory for resolving **relative** artifact paths (`-i`, `-a`, `-t`, split outputs). Absolute paths and `-` (stdin/stdout) are unaffected. Defaults to the process CWD; also `$AURAL_DIRECTORY` or config `directory`. A non-existent directory is a usage error (Aural never creates it).
+
 **Capture format & timing (live capture):**
 - `-r, --rate Hz` : sample rate (live default 44100; file convert defaults to the source rate).
 - `-b, --bits 16|24|32` : bit depth (live default 16; convert defaults to the source depth).
@@ -227,20 +232,36 @@ aural -i mtg.wav --speakers=acoustic -t mtg.json     # diarize a recording -> la
 
 **`aural config`** — persisted defaults in `~/.aural/config.json` (JSON; user-editable, kebab-case keys).
 - `show` (default; `--json`) / `set <key> <value>` / `unset <key>` / `path`.
-- Keys: `model`, `engine`, `language`, `translate`, `silence-threshold`, `device`. Values are type-checked (`translate` boolean; `silence-threshold` negative number; `engine` a known engine); unknown keys are rejected. Values beginning with `-` are taken verbatim (e.g. `aural config set silence-threshold -40`).
+- Keys (kebab-case): `engine`, `model`, `language`, `translate`, `device`, `directory`, `capture-backend`, `rate`, `bits`, `channels`, `silence-threshold`, `vad`, `vad-threshold`, `gain`, `speakers`, `speaker-mode`, `speaker-labels`, `diarize-engine`, `max-speakers`, `speaker-threshold`. Values are type-checked (e.g. `translate`/`vad`/`gain`/`speakers` boolean; `silence-threshold` negative; `engine` a known engine; `directory` an existing directory; `vad-threshold`/`speaker-threshold` in 0–1); unknown keys are rejected. `aural config show` lists every setting with its value, source, and a one-line description. Values beginning with `-` are taken verbatim (e.g. `aural config set silence-threshold -40`).
 
-**Defaults precedence (environment & configuration).** Each setting resolves in the order **flag › environment (`$AURAL_*`) › config (`aural config`) › built-in default**:
+**Defaults precedence (environment & configuration).** Each setting resolves in the order **flag › environment (`$AURAL_*`) › config (`aural config`) › built-in default** (the order `aural config show` displays):
 
 | Setting | Flag | Env var | Config key | Default |
 |---------|------|---------|------------|---------|
-| model | `--model` | `$AURAL_WHISPER_MODEL` | `model` | (required) |
 | engine | `-e/--engine` | `$AURAL_ENGINE` | `engine` | `whisper` |
+| model | `--model` | `$AURAL_WHISPER_MODEL` | `model` | (required) |
 | language | `--language` | `$AURAL_LANGUAGE` | `language` | `auto` |
 | translate | `--translate`/`--no-translate` | `$AURAL_TRANSLATE` | `translate` | `false` |
-| silence threshold | `--silence-threshold` | `$AURAL_SILENCE_THRESHOLD` | `silence-threshold` | `-50` |
 | input device | `-d/--device` | `$AURAL_DEVICE` | `device` | system default input |
+| working directory | `--directory`/`-C` | `$AURAL_DIRECTORY` | `directory` | current working directory |
+| capture backend | `--capture-backend` | `$AURAL_CAPTURE` | `capture-backend` | `auto` |
+| sample rate | `-r/--rate` | `$AURAL_RATE` | `rate` | contextual (live 44100) |
+| bit depth | `-b/--bits` | `$AURAL_BITS` | `bits` | contextual (live 16) |
+| channels | `-c/--channels` | `$AURAL_CHANNELS` | `channels` | auto (source, ≤2) |
+| silence threshold | `--silence-threshold` | `$AURAL_SILENCE_THRESHOLD` | `silence-threshold` | `-50` |
+| VAD | `--vad`/`--no-vad` | `$AURAL_VAD` | `vad` | `true` |
+| VAD threshold | `--vad-threshold` | `$AURAL_VAD_THRESHOLD` | `vad-threshold` | `0.5` |
+| gain | `--gain`/`--no-gain` | `$AURAL_GAIN` | `gain` | `true` |
+| speakers | `--speakers`/`--no-speakers` | `$AURAL_SPEAKERS` | `speakers` | `false` |
+| speaker mode | `--speaker-mode` | `$AURAL_SPEAKER_MODE` | `speaker-mode` | `auto` |
+| speaker labels | `--speaker-labels` | `$AURAL_SPEAKER_LABELS` | `speaker-labels` | `You,Others` |
+| diarize engine | `--diarize-engine` | `$AURAL_DIARIZE_ENGINE` | `diarize-engine` | `auto` |
+| max speakers | `--max-speakers` | `$AURAL_MAX_SPEAKERS` | `max-speakers` | (unset) |
+| speaker threshold | `--speaker-threshold` | `$AURAL_SPEAKER_THRESHOLD` | `speaker-threshold` | `~0.65` |
 
 Model values (flag/env/config) may each be a ggml path or a short name resolved under `~/.aural/models`. Malformed env values (non-boolean `$AURAL_TRANSLATE`, non-negative/non-numeric `$AURAL_SILENCE_THRESHOLD`) are reported as usage errors.
+
+**Working directory & path resolution.** All **relative** artifact paths — `-i`, `-a`, `-t`, and `--split` outputs — resolve against the working directory (`--directory`/`-C` › `$AURAL_DIRECTORY` › config `directory` › process CWD). Absolute paths, `-` (stdin/stdout), and Aural's own state (`~/.aural/…` config and models) are unaffected. A non-existent directory is a usage error; Aural never creates it. This makes invocations reproducible regardless of the launcher's CWD and is the basis for the planned remote-control feature, where a controlling process/host points Aural at a shared artifact directory.
 
 All invocations accept `-h, --help` and `-v, --verbose`.
 
@@ -380,6 +401,7 @@ Speaker labeling answers "who said what." It is **opt-in** via `--speakers`/`--d
 6. **Overlapping speech:** The streaming EEND diarizer (LS-EEND) models overlap internally (independent per-speaker activity per frame), so its timeline can mark concurrent speakers. Aural still emits one label per ASR segment (the dominant speaker), because the ASR engine produces one text per segment; true per-word/overlap attribution (WhisperX-style word-level alignment) is deferred.
 7. ~~**Diarization streaming model choice:** LS-EEND vs Sortformer~~ → **Resolved:** live streaming uses **LS-EEND** — FluidAudio's long-form streaming end-to-end neural diarizer — maintaining a continuous frame-level speaker timeline decoupled from the ASR VAD segmentation. This replaced the original per-segment embedding-clustering approach, which collapsed distinct speakers whenever a VAD segment blended several voices (the whole-segment embedding was not discriminative). Sortformer (4-speaker cap, steadier identities) remains a possible alternative. (FluidAudio model-download footprint of always-linking the diarization assets is still open.)
 8. **Separate-track audio output:** Whether to expose the internal mic/system separation as user-facing audio output (e.g. dual files or L/R channels), beyond its use for transcript attribution. Currently scoped out (see §4.2).
+9. **Remote control (deferred):** Transport/protocol (local socket, files in the working `directory`, or network), auth, and exposed operations are open. The `directory` setting (§6.1) is the first building block; the rest is Post-MVP.
 
 ### Resolved (2026-06-12)
 - ~~Language/stack~~ → **Swift**, single binary, SwiftPM modular targets.

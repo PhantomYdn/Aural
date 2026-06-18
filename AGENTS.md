@@ -18,10 +18,12 @@ Native macOS CLI (single Swift binary) that captures microphone and system/per-a
 - Prefer the simplest viable design: before adding a command/flag, question whether it's needed at all; when a surface feels complex, redesign from the ground up rather than patching incrementally
 - No third-party audio drivers (no BlackHole); no network calls by default
 - System/app capture requires the macOS "System Audio Recording" TCC permission
+- When a change adds/affects a user-facing surface (e.g. `aural config show`, `--help`), verify the surface actually reflects it (run the binary) — don't stop at "it compiles"
 
 ## Gotchas
 
 - ArgumentParser: the root command owns flags AND has subcommands. A value-bearing option on the root (e.g. `-i/--input`) "floats up" and is greedily consumed even after a subcommand token, so reusing that option name in a subcommand breaks it. Don't reuse value-bearing option names across root and subcommands — give subcommands positional args instead (e.g. `aural info <file>`).
+- Adding a config setting must stay in sync across five places, or builds/tests break: the `ConfigKey` enum, the `Configuration.settings` registry (its count must equal `ConfigKey.allCases`), the `Configuration` field + `CodingKeys`, `ResolvedSettings` (resolve + memberwise init), and any exhaustive `switch ConfigKey` (e.g. `ConfigurationTests.roundTripsAllKeys`).
 
 ## Workflow
 
