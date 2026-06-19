@@ -14,3 +14,13 @@ copyright headers.
 Only the encoder is included; the MP3 decoder (mpglib) and SIMD
 (xmm_quantize_sub.c) sources are omitted, and a minimal Sources/CLame/config.h
 replaces LAME's autoconf-generated config.h.
+
+FlyingFox / FlyingSocks — embedded HTTP server
+----------------------------------------------
+The remote-control agent (`aural --remote-control`, PRD §6.10) serves its
+HTTP/JSON control API using FlyingFox and FlyingSocks
+(https://github.com/swhitty/FlyingFox), added as SwiftPM dependencies and
+statically linked into the binary (nothing for users to install).
+
+FlyingFox is licensed under the MIT License. Copyright (c) 2022 Simon Whitty.
+See the project's LICENSE for the full text.

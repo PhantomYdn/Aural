@@ -119,6 +119,44 @@ check_system_backend sckit "sckit --system"
 check_system_backend sckit --mix "sckit --system --mix"
 check_system_backend auto "auto --system (picks a backend)"
 
+echo "[7] Interactive mode requires a TTY (negative guard)"
+if "$AURAL" --interactive </dev/null >/dev/null 2>"$WORK/interactive.err"; then
+  fail "interactive — expected a usage error without a TTY"
+elif grep -qi "interactive terminal" "$WORK/interactive.err"; then
+  pass "interactive rejects a non-TTY with a clear error"
+else
+  fail "interactive — unexpected error: $(tr '\n' ' ' <"$WORK/interactive.err" | cut -c1-80)"
+fi
+echo "  NOTE: the positive interactive path (space/Enter keys) needs a real TTY; run 'aural --interactive' by hand."
+
+echo "[8] Remote-control agent (loopback HTTP API: start/409/stop lifecycle)"
+if ! command -v curl >/dev/null; then
+  skip "remote-control — curl not found"
+else
+  PORT=$((8500 + RANDOM % 400))
+  "$AURAL" --remote-control "127.0.0.1:$PORT" -C "$WORK" >"$WORK/agent.log" 2>&1 &
+  AGENT_PID=$!
+  sleep 1
+  if curl -fsS "http://127.0.0.1:$PORT/status" >/dev/null 2>&1; then
+    start="$(curl -fsS -X POST "http://127.0.0.1:$PORT/start" -d '{"audio":"agent-rec.wav","duration":3}')"
+    code409="$(curl -s -o /dev/null -w '%{http_code}' -X POST "http://127.0.0.1:$PORT/start" -d '{"audio":"x.wav"}')"
+    if echo "$start" | grep -q '"state":"recording"' && [[ "$code409" == "409" ]]; then
+      sleep 4
+      st="$(curl -fsS "http://127.0.0.1:$PORT/status")"
+      if echo "$st" | grep -q '"state":"stopped"'; then
+        check_audio "$WORK/agent-rec.wav" 2 "remote-control start/stop lifecycle"
+      else
+        fail "remote-control — session did not stop cleanly: $st"
+      fi
+    else
+      fail "remote-control — start/409 failed (start=$start, second=$code409)"
+    fi
+  else
+    skip "remote-control — agent did not respond (mic permission?): $(tr '\n' ' ' <"$WORK/agent.log" | cut -c1-80)"
+  fi
+  kill "$AGENT_PID" 2>/dev/null
+fi
+
 echo
 if [[ "$FAILED" -eq 0 ]]; then
   echo "ALL LIVE CHECKS PASSED"

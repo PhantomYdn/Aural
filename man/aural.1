@@ -259,6 +259,41 @@ on Intel, diarized modes fall back to
 .BR You / Others .
 .SH OTHER OPTIONS
 .TP
+.BI \-C ", " \-\-directory " PATH"
+Resolve relative artifact paths
+.RB ( \-i ", " \-a ", " \-t ", "
+and
+.B \-\-split
+outputs) against
+.IR PATH ;
+absolute paths and
+.B \-
+are unaffected. Defaults to the current directory (also
+.BR $AURAL_DIRECTORY ).
+The directory must already exist.
+.TP
+.B \-\-interactive
+Run a live capture in a minimal terminal UI: the transcript streams to the
+terminal and single keys control it \(em
+.B space
+pauses/resumes (the paused interval is not recorded) and
+.B Enter
+finishes (Ctrl\-C also stops). Needs a TTY; not combined with
+.B \-i
+or stdout output.
+.TP
+.BI \-\-remote\-control " [host:]port"
+Run as a control agent (no immediate capture): serve an HTTP/JSON API on
+.RI [ host :] port
+so scripts can start/pause/resume/stop/query one recording. A bare port or
+empty host binds loopback (conventionally
+.BR 8473 );
+a non\-loopback bind requires
+.BR $AURAL_REMOTE_TOKEN .
+Launch\-time capture flags become per\-session defaults. See
+.I docs/remote-control.md
+in the project.
+.TP
 .BR \-v ", " \-\-verbose
 Log diagnostic details to standard error.
 .TP
@@ -293,8 +328,11 @@ CoreML engines use a prefix
 makes it the default (also setting the engine for whisperkit/parakeet).
 .TP
 .B aural config show|set <key> <value>|unset <key>|path
-View and edit persisted defaults. Keys:
-.BR model ", " engine ", " language ", " translate ", " silence\-threshold ", " device .
+View and edit persisted defaults. Keys include
+.BR model ", " engine ", " language ", " translate ", " silence\-threshold ", " device ", " directory
+and the capture/speaker settings; run
+.B aural config show
+for the full list.
 .PP
 Use
 .B aural help <subcommand>
@@ -337,9 +375,18 @@ Default silence threshold in dBFS (negative).
 .B AURAL_DEVICE
 Default input device UID.
 .TP
+.B AURAL_DIRECTORY
+Default working directory for relative artifact paths.
+.TP
 .B AURAL_CAPTURE
 Default system/app capture backend
 .RB ( auto / sckit / coreaudio ).
+.TP
+.B AURAL_REMOTE_TOKEN
+Bearer token required by
+.B \-\-remote\-control
+when binding to a non\-loopback interface (and enforced on every request when
+set).
 .TP
 .B AURAL_WHISPER_BIN ", " AURAL_WHISPER_SERVER_BIN
 Override the whisper.cpp CLI / server binary path.
@@ -450,6 +497,22 @@ Stream live WAV into another tool:
 .RS
 .nf
 aural \-a \- \-\-duration 10 | ffmpeg \-i \- out.mp3
+.fi
+.RE
+.PP
+Interactive meeting capture (space pauses, Enter finishes):
+.PP
+.RS
+.nf
+aural \-\-interactive \-\-system \-\-mix \-a meeting.m4a
+.fi
+.RE
+.PP
+Run a loopback control agent for scripts to drive:
+.PP
+.RS
+.nf
+aural \-\-remote\-control 8473 \-C ~/Recordings
 .fi
 .RE
 .SH PERMISSIONS

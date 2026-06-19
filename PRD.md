@@ -13,6 +13,8 @@ Aural is a native macOS command-line utility, shipped as a single Swift binary, 
 
 The tool strictly follows Unix/Linux design patterns, treating audio as a stream that can be manipulated, piped, and extended by other command-line programs. The primary goal is to provide a simple, scriptable, and composable replacement for GUI-based audio recording, enabling users to automate meeting recordings, create transcription pipelines, or build custom audio-processing chains without leaving the terminal.
 
+Beyond batch and pipe usage, Aural can run **interactively** — a minimal terminal UI that shows the live transcript and accepts pause/resume/stop from the keyboard — and as an on-demand **remote-control agent** that external programs (including browser userscripts) drive over a local HTTP/JSON API to decide when, what, and where to record.
+
 ---
 
 ## 2. Objectives & Success Criteria
@@ -24,6 +26,7 @@ The tool strictly follows Unix/Linux design patterns, treating audio as a stream
 | Simplify the transcription pipeline | Output files (WAV, M4A, FLAC, MP3, Opus) can be directly fed to `whisper.cpp`, Fabric AI, or cloud-based transcription services without extra conversion |
 | Minimise dependencies and footprint | The tool is shipped as a single Swift binary requiring only macOS baseline frameworks (CoreAudio, AudioToolbox, AVFoundation); no third-party audio driver installation |
 | Follow the "do one thing well" philosophy | The root verb captures/transcribes/transcodes via composable flags; small utility subcommands inspect the environment (list devices, list apps, file info); complex workflows are built by chaining invocations through stdin/stdout |
+| Make live capture observable and externally controllable | Starting a capture prints the resolved engine/model/source/format/outputs to stderr; `--interactive` exposes pause/resume/stop at the keyboard; `--remote-control` lets an external script start/stop/pause/query a recording via the documented HTTP API with a round-trip < 200 ms |
 
 ---
 
@@ -62,11 +65,14 @@ The tool strictly follows Unix/Linux design patterns, treating audio as a stream
 | 18 | Combined source-split + per-source diarization | P2 | Label You (mic) plus each distinct remote participant (diarize the system track) so multi-party calls resolve both sides at once. |
 | 19 | Named speaker identification (enrolled voiceprints) | Post-MVP | Match voices to named people via stored speaker embeddings; enrollment + a local voiceprint store (FluidAudio embedding extraction). |
 | 20 | Working directory for artifacts | P1 | A base directory for resolving **relative** input/output paths (`-i`, `-a`, `-t`, and `--split` outputs), defaulting to the current working directory and overridable via `--directory`/`-C`, `$AURAL_DIRECTORY`, or config `directory`. Absolute paths and `-` (stdin/stdout) are unaffected; the directory must exist. Foundation for headless/remote operation (see §4.2). |
+| 21 | Startup status summary | P1 | On capture start, print a concise status block to stderr — engine, model, language, source/device, capture backend, format, output destinations, speaker mode, VAD, and any duration limit. Shown when stderr is a TTY or with `-v`; suppressed when stderr is redirected so pipelines/cron stay clean. Never written to stdout. See §6.8. |
+| 22 | Interactive mode | P1 | `--interactive`: a minimal terminal UI for live capture — a status header, the live transcript, and single-key controls (**space** = pause/resume, **Enter** = finish; Ctrl-C also stops). **Pause excludes the paused interval** from both audio and transcript (a true gap, so output is shorter than wall-clock). Requires a controlling TTY; incompatible with stdout (`-`) streaming and with `--remote-control`. See §6.9. |
+| 23 | Remote-control agent | P1 | `aural --remote-control [ADDR]` runs Aural as a control agent (no immediate capture) exposing an **HTTP/JSON API over TCP** — bound to loopback by default, or to an explicit `interface:port`. External scripts choose **when** (start/stop/pause/resume), **what** (sources/format/engine/model), and **where** (output paths resolved under the working `directory`). Documented wire protocol (no bundled client) plus a Tampermonkey Google-Meet reference userscript. See §6.10. |
 
 ### 4.2 Post-MVP Features (Future)
 
-- **Daemon/agent mode**: launchd-managed background service for scheduled and unattended recording, with IPC for client commands.
-- **Remote control**: control Aural from another process or host (start/stop/configure captures); the shared working `directory` (§6.1) anchors control/state artifacts.
+- **Scheduled / unattended daemon**: a launchd-managed background service that *schedules* recordings (cron-style) and survives logout, building on the on-demand remote-control agent (§6.10) which is now in scope for the MVP.
+- **Cross-host & authenticated remote control**: hardened auth and same-LAN/remote operation beyond the loopback default of §6.10 (token/TLS, allow-lists).
 - **Silence-based voice activity detection** for trimming.
 - **Real-time streaming** to a network socket or HTTP endpoint.
 - **Multi-channel mapping** (e.g., separate tracks for mic and system audio).
@@ -139,6 +145,30 @@ As a **developer**, I want my meeting transcript to label who said each line —
   - [ ] Diarization runs fully on-device; the first run may download CoreML models, after which it is offline
   - [ ] During live capture, speaker labels appear close to runtime (streaming), not only after the call ends
 
+### US09 — Interactive recording with a break
+As a **developer**, I want to record interactively and pause during a break, so that the break is not part of the recording and I can stop cleanly when done.
+- Acceptance Criteria:
+  - [ ] `aural --interactive -a notes.m4a` shows a status header and the live transcript, and accepts single-key controls
+  - [ ] Pressing **space** pauses; the paused interval is absent from both `notes.m4a` and the transcript (a true gap), and **space** again resumes
+  - [ ] Pressing **Enter** (or Ctrl-C) stops and finalises the file so it remains playable (same guarantee as Ctrl+C)
+  - [ ] When stdout is not a TTY (or `-a -`/`-t -` is requested), `--interactive` exits with a clear usage error; the terminal is restored on exit and on SIGINT/SIGTERM
+
+### US10 — Know what's running before I speak
+As a **power user**, I want Aural to tell me which engine, model, and source it's using when a capture starts, so that I can catch a misconfiguration before recording a whole meeting.
+- Acceptance Criteria:
+  - [ ] Starting a live capture in a terminal prints a status block to stderr (engine, model, language, source/device, capture backend, format, outputs, speaker mode, VAD, duration)
+  - [ ] The status block is suppressed when stderr is redirected/piped, and always shown with `-v`
+  - [ ] The status block is never written to stdout (it does not corrupt `-a -`/`-t -` streams)
+
+### US11 — Browser-driven meeting capture
+As a **knowledge worker**, I want my browser to start and stop Aural automatically around Google Meet calls, so that every meeting is recorded and named without my intervention.
+- Acceptance Criteria:
+  - [ ] `aural --remote-control` starts an agent listening on loopback and prints its address; it does not begin capturing on its own
+  - [ ] A Tampermonkey userscript (shipped as a reference in the docs) calls `POST /start` when a Meet call is joined, with a filename derived from the meeting title and date, and `POST /stop` when the call ends
+  - [ ] The recording is written under the agent's working `directory`; `GET /status` reports the session's state, elapsed time, and output paths (the API never serves the transcript/audio content itself)
+  - [ ] A second `POST /start` while a recording is active is rejected with `409 Conflict` (single active session)
+  - [ ] With a non-loopback bind address, the agent refuses to start unless a token (`$AURAL_REMOTE_TOKEN`) is configured, and rejects unauthenticated requests
+
 ---
 
 ## 6. Functional Requirements
@@ -195,6 +225,10 @@ aural models | config                    # model + default management
 - `--diarize-engine auto|streaming|offline` : pick the diarizer (default `auto` → streaming **(LS-EEND)** for live capture, offline for `-i` files).
 - `--speaker-labels "You,Others"` : rename the source-attribution labels (default `You,Others`).
 
+**Interactive & remote control (§6.8–§6.10):**
+- `--interactive` : run live capture in a minimal terminal UI (status header + live transcript + single-key **space** pause/resume, **Enter** finish; Ctrl-C also stops). Pause omits the paused interval from the outputs. Requires a controlling TTY; mutually exclusive with `-` (stdout) outputs and with `--remote-control`. (Modal flag — not a persisted config key.)
+- `--remote-control [host:]port` : start Aural as a control **agent** instead of capturing immediately, serving an HTTP/JSON API over TCP. The value is required: a bare port or an empty host binds **loopback** (conventionally `8473`, e.g. `8473` or `:8473`); `0.0.0.0:8473` or a specific IPv4 binds elsewhere. Any other capture/transcription flags given at launch become the per-session **defaults** for recordings started via the API. Non-loopback binds require `$AURAL_REMOTE_TOKEN`. (Modal flag — not a persisted config key.)
+
 **Examples:**
 ```
 aural                                       # live mic, transcript -> stdout
@@ -208,6 +242,8 @@ aural -i talk.mp3 --language auto -t talk.srt        # detect language -> subtit
 aural --system --engine whisperkit --translate -t -  # any language -> English, live
 aural --system --mix --speakers -t mtg.srt           # meeting w/ speaker labels (You / Speaker N)
 aural -i mtg.wav --speakers=acoustic -t mtg.json     # diarize a recording -> labeled JSON
+aural --interactive --system --mix -a mtg.m4a        # interactive meeting capture (pause/stop)
+aural --remote-control 127.0.0.1:8080                # run the control agent on loopback:8080
 ```
 
 **`aural devices`**
@@ -346,17 +382,47 @@ Speaker labeling answers "who said what." It is **opt-in** via `--speakers`/`--d
   - Diarization/VAD CoreML models are managed through `aural models` (engine-tagged, e.g. `fluidaudio:diarizer`, `fluidaudio:vad`) and FluidAudio's own cache (`~/Library/Application Support/FluidAudio/Models`); `aural models list` shows them. They download from Hugging Face on first use (opt-in network, then fully local) — consistent with the `whisperkit`/`parakeet` engines and §7 Security & Privacy.
   - Acoustic diarization and VAD are **Apple-Silicon-first** (runtime-gated with a clear error on Intel, like `whisperkit`/`parakeet`). **Source attribution (a) has no such requirement** — it is pure stream routing and works everywhere `--mix` works, including headless. No new TCC permission is required (same captured audio).
 
+### 6.8 Startup Status
+
+- When a **live capture** starts, Aural prints a concise, human-readable status block to **stderr** summarising the resolved configuration: recognition engine, model, language (and `--translate`), input source/device (and capture backend for system/app), audio format (rate/bits/channels), output destinations (audio path/format, transcript path/format, or "stdout"), speaker mode, VAD on/off, and any `--duration`/`--split` limit.
+- **Visibility:** shown by default when stderr is a TTY, and always with `-v`; **suppressed when stderr is not a TTY** (redirected/piped/cron) so machine pipelines stay clean. It is **never written to stdout** and therefore never corrupts `-a -`/`-t -` streams.
+- It reuses already-resolved values (the same data `-v` logs today via `Log.verbose`), so it adds no new resolution work; it is a presentation layer over the existing settings resolution.
+
+### 6.9 Interactive Mode
+
+- `--interactive` runs a **live capture** in a minimal terminal UI on the controlling terminal: a status header (§6.8), the live transcript as it is produced (with speaker labels when `--speakers` is active), and status lines for control hints and pause/resume/stop notices (printed on stderr so they don't fight the transcript on stdout).
+- **Controls (single keypress):** **space** toggles pause/resume; **Enter** finishes. Stop is equivalent to SIGINT (Ctrl-C also works) — capture is finalised so every output file remains playable.
+- **Pause semantics:** pausing **suspends capture**; the paused interval is **not** written to any output (audio or transcript), producing a true gap. Consequently the output length is shorter than wall-clock by the total paused time. Resume continues appending. (Interaction with `--split` is noted in §10.)
+- **Requirements & exclusivity:** requires a controlling TTY (clear usage error otherwise). It is **mutually exclusive with stdout outputs** (`-a -`, `-t -`, `--raw`) because the UI owns the terminal, and with `--remote-control`. The transcript is rendered in the UI even when no `-t` is named; `-a`/`-t` still persist outputs as usual.
+- **Terminal hygiene:** raw/cbreak mode and any alternate display state are **always restored on exit**, including on SIGINT/SIGTERM and on error.
+
+### 6.10 Remote-Control Agent
+
+- `aural --remote-control [host:]port` starts Aural as a long-running **control agent** that does **not** capture on its own; it serves a small HTTP/1.1 + JSON API over TCP and waits for commands. The value is required: a bare port or empty host binds **loopback `127.0.0.1`** (conventionally port **8473**); `0.0.0.0:PORT` or a specific IPv4 binds elsewhere (IPv6 is not supported). The agent prints its bound address to stderr on start.
+- **Defaults from launch flags:** any capture/transcription flags supplied at launch (e.g. `--system --mix --engine whisperkit -C ~/Recordings`) become the **session defaults**; a `POST /start` body may override them.
+- **Where:** output paths in a start request are resolved against the agent's working `directory` (Feature 20 / §6.1). Relative names (e.g. derived from a meeting title) are therefore written to a known, configured location; absolute paths are honoured as-is.
+- **Endpoints — flat control verbs (one active session):**
+  - `GET /status` — agent liveness, version, bind address, and the current session's state (`idle`/`recording`/`paused`), elapsed time, and output paths.
+  - `POST /start` — begin recording; an optional JSON body mirrors the CLI flags/outputs over the launch defaults (e.g. `{ "transcript": "notes.txt", "audio": "rec.m4a", "system": true }`). Returns the new state + resolved output paths.
+  - `POST /pause` · `POST /resume` — pause/resume the active recording (pause uses the §6.9 gap semantics).
+  - `POST /stop` — stop and finalise the active recording.
+- **Single active session:** the agent records **one session at a time**; a `POST /start` while a recording is active is rejected with `409 Conflict`. (Concurrent sessions are out of scope for now.)
+- **Control + status only:** the API exposes **controls and status metadata only** — it **never serves transcript or audio content**. Produced artifacts are retrieved from the working `directory` over the filesystem, not the API.
+- **Errors** map Aural's exit-code semantics onto HTTP status codes (e.g. permission denied → `403`, bad parameters → `400`, engine/model missing → `404`/`422`, already recording → `409`) with a JSON `{ "error": … }` body.
+- **Security:** the listener is **loopback-only by default**, consistent with §7 "no external network calls by default" (it accepts local connections; it makes none). Binding to a **non-loopback** interface is explicit opt-in and **requires a bearer token** (`$AURAL_REMOTE_TOKEN`, sent as `Authorization: Bearer …`); the agent **refuses to bind** to a non-loopback address without one. `--remote-control` is mutually exclusive with `--interactive` and with the immediate-capture/`-i` input modes.
+- **Clients:** no client is bundled — the wire protocol is documented so any language can drive it (`curl`, scripts, browser userscripts). A **Tampermonkey Google-Meet reference userscript** ships in the docs: it watches `meet.google.com`, calls `POST /start` on call-join with a filename derived from the meeting title + date, and `POST /stop` on call-end, using `GM_xmlhttpRequest` to the loopback agent.
+
 ---
 
 ## 7. Non-Functional Requirements
 
 | Category | Requirement |
 |----------|-------------|
-| **Performance** | Recording must use < 3% CPU on an Apple Silicon Mac (16 kHz mono); buffering delays < 100 ms. Live diarization (streaming) must keep up with real time (RTF < 1) on Apple Silicon and emit speaker labels close to runtime — a tentative label within ~1 s and a finalized one within ~2 s of a turn. Offline (`-i`) diarization is bounded by file length, not interactive. Source attribution (§6.7a) adds negligible overhead. |
+| **Performance** | Recording must use < 3% CPU on an Apple Silicon Mac (16 kHz mono); buffering delays < 100 ms. Live diarization (streaming) must keep up with real time (RTF < 1) on Apple Silicon and emit speaker labels close to runtime — a tentative label within ~1 s and a finalized one within ~2 s of a turn. Offline (`-i`) diarization is bounded by file length, not interactive. Source attribution (§6.7a) adds negligible overhead. Interactive (§6.9) and remote-control (§6.10) commands must take effect promptly — a control request is acknowledged within ~100 ms and pause/resume takes hold within one capture buffer. |
 | **Reliability** | 24-hour continuous recording must produce a valid, non-corrupted file when terminated via SIGINT/SIGTERM. Resilience to hard kills (SIGKILL, power loss) is parked — see Open Questions. |
-| **Usability** | CLI help and error messages are clear, include examples, and follow POSIX utility conventions. |
-| **Compatibility** | macOS 14.4 (Sonoma) and later — required by the Core Audio process-tap API; both Intel and Apple Silicon. The ScreenCaptureKit capture backend additionally needs macOS 15+ and a graphical login session; on macOS 14.x or headless it falls back to the Core Audio tap (see §6.2). The `whisperkit` and `parakeet` engines, and **acoustic diarization / VAD (§6.7b)**, are Apple-Silicon-first (runtime-gated with a clear error on Intel); `whisper` and `apple` cover Intel. **Source attribution (§6.7a) is platform-agnostic** (pure stream routing) and works wherever `--mix` works, including headless. |
-| **Security & Privacy** | No external network calls by default; cloud transcription backends are opt-in and use HTTPS with user-provided API keys. (Live transcription may run a local `whisper-server` bound to loopback 127.0.0.1 for performance — IPC with Aural's own child process, never an external connection; disable with `AURAL_WHISPER_SERVER=0`.) System/app audio capture requires a TCC permission that depends on the backend (§6.2): the Core Audio tap uses the narrower "System Audio Recording" permission (and works headless); the ScreenCaptureKit backend requires the broader "Screen Recording" permission and a GUI session. Both are terminal-attributed for unbundled CLIs and their approval flows are documented. The `apple` engine uses the Speech Recognition TCC permission; `whisperkit` and `parakeet` download CoreML models from Hugging Face on first use (model fetch only, then fully local). Speaker diarization/VAD (§6.7) likewise fetch FluidAudio CoreML models from Hugging Face on first use, then run fully on-device, and require **no additional TCC permission** (they operate on already-captured audio). Note: live VAD segmentation is on by default on Apple Silicon, so its Silero model is fetched on the first live run — a deliberate, documented exception to "no network by default", opt out with `AURAL_VAD=0`. |
+| **Usability** | CLI help and error messages are clear, include examples, and follow POSIX utility conventions. The startup status summary (§6.8) shows the resolved configuration on stderr without polluting stdout. Interactive mode (§6.9) uses single-key controls and **always restores the terminal** (raw/alternate-screen state) on exit, error, or signal. |
+| **Compatibility** | macOS 14.4 (Sonoma) and later — required by the Core Audio process-tap API; both Intel and Apple Silicon. The ScreenCaptureKit capture backend additionally needs macOS 15+ and a graphical login session; on macOS 14.x or headless it falls back to the Core Audio tap (see §6.2). The `whisperkit` and `parakeet` engines, and **acoustic diarization / VAD (§6.7b)**, are Apple-Silicon-first (runtime-gated with a clear error on Intel); `whisper` and `apple` cover Intel. **Source attribution (§6.7a) is platform-agnostic** (pure stream routing) and works wherever `--mix` works, including headless. Interactive mode (§6.9) requires a controlling TTY (clear usage error otherwise); the status summary (§6.8) and the remote-control agent (§6.10) are platform-agnostic and run headless. |
+| **Security & Privacy** | No external network calls by default; cloud transcription backends are opt-in and use HTTPS with user-provided API keys. (Live transcription may run a local `whisper-server` bound to loopback 127.0.0.1 for performance — IPC with Aural's own child process, never an external connection; disable with `AURAL_WHISPER_SERVER=0`.) **The remote-control agent (§6.10) opens a TCP listener only when `--remote-control` is given; it binds loopback `127.0.0.1` by default (accepting local connections, making none — still no outbound calls). Binding to a non-loopback interface is explicit opt-in and requires a bearer token (`$AURAL_REMOTE_TOKEN`); the agent refuses to bind otherwise.** System/app audio capture requires a TCC permission that depends on the backend (§6.2): the Core Audio tap uses the narrower "System Audio Recording" permission (and works headless); the ScreenCaptureKit backend requires the broader "Screen Recording" permission and a GUI session. Both are terminal-attributed for unbundled CLIs and their approval flows are documented. The `apple` engine uses the Speech Recognition TCC permission; `whisperkit` and `parakeet` download CoreML models from Hugging Face on first use (model fetch only, then fully local). Speaker diarization/VAD (§6.7) likewise fetch FluidAudio CoreML models from Hugging Face on first use, then run fully on-device, and require **no additional TCC permission** (they operate on already-captured audio). Note: live VAD segmentation is on by default on Apple Silicon, so its Silero model is fetched on the first live run — a deliberate, documented exception to "no network by default", opt out with `AURAL_VAD=0`. |
 | **Maintainability** | Single Swift binary built with SwiftPM; modular targets: `DeviceManager`, `TapEngine`, `Encoders`, `CLI`. Well-documented code. The CoreML engines add the `argmaxinc/argmax-oss-swift` (whisperkit) and `FluidInference/FluidAudio` (parakeet) SwiftPM dependencies, currently always linked (a lean/trait-gated build is a future option — they increase binary size). Speaker diarization and VAD (§6.7) reuse the already-linked `FluidInference/FluidAudio` dependency, so they add no new SwiftPM dependency (only additional model assets). |
 | **Installability** | Distributed via Homebrew (`brew install aural`) and direct download from GitHub Releases; binary is signed and notarized so TCC permission flows work cleanly. |
 | **Auditability** | All recorded file paths and durations are logged to STDERR when `-v` is enabled. |
@@ -373,6 +439,7 @@ Speaker labeling answers "who said what." It is **opt-in** via `--speakers`/`--d
 - **Diarization quality:** Diarization Error Rate (DER) on a reference set (e.g. AMI-style meeting audio) within a documented target band for the chosen FluidAudio model; tracked offline so regressions are visible.
 - **Runtime labeling latency:** ≥ 90% of live speaker labels finalized within ~2 s of the corresponding turn (per §7 Performance).
 - **Segmentation stability:** VAD-based live segmentation produces measurably fewer spurious cuts than the amplitude-threshold method on a fixed test clip (the "delay in a sound" instability this feature targets).
+- **Remote-control responsiveness:** API control commands (start/stop/pause/resume) round-trip in < 200 ms on loopback, and the shipped Tampermonkey Google-Meet recipe records + names a call end-to-end without manual steps.
 
 ---
 
@@ -387,7 +454,8 @@ Speaker labeling answers "who said what." It is **opt-in** via `--speakers`/`--d
 | **M5 – Polish & Release** | Code signing & notarization, Homebrew formula, man page, example scripts, CI/CD, public beta | Week 8–9 | M2, M3, M4 |
 | **M6 – Engines & Languages** | Engine abstraction; multilingual + `--translate` + `--language auto` on whisper; `aural models`; `apple` (Speech.framework) and `whisperkit` (CoreML) engines | Post-M5 | M4 |
 | **M7 – Speaker Recognition & Runtime Segmentation** | Source attribution (You/Others) via internal multi-track capture; acoustic diarization (FluidAudio, offline + streaming); VAD-based live segmentation; `--speakers`/`--diarize` flags; speaker labels in txt/srt/json; diarization/VAD models in `aural models` | Post-M6 | M4, M6 |
-| **Post-MVP** | Daemon mode (launchd scheduled recording), streaming transcription, cloud backends, configuration profiles, named speaker identification (voiceprints), overlapping-speech handling | Ongoing | M5 |
+| **M8 – Status, Interactive & Remote Control** | Startup status summary (§6.8); `--interactive` minimal UI with pause(gap)/resume/stop (§6.9); `--remote-control` HTTP/JSON agent (§6.10) with start/stop/pause/resume/status, loopback default + token for non-loopback; working-directory path resolution for outputs; documented protocol + Tampermonkey Google-Meet reference userscript | Post-M7 | M4, Feature 20 (working directory) |
+| **Post-MVP** | Scheduled/unattended launchd daemon, cross-host/authenticated remote control, streaming transcription, cloud backends, configuration profiles, named speaker identification (voiceprints), overlapping-speech handling | Ongoing | M5, M8 |
 
 ---
 
@@ -401,7 +469,8 @@ Speaker labeling answers "who said what." It is **opt-in** via `--speakers`/`--d
 6. **Overlapping speech:** The streaming EEND diarizer (LS-EEND) models overlap internally (independent per-speaker activity per frame), so its timeline can mark concurrent speakers. Aural still emits one label per ASR segment (the dominant speaker), because the ASR engine produces one text per segment; true per-word/overlap attribution (WhisperX-style word-level alignment) is deferred.
 7. ~~**Diarization streaming model choice:** LS-EEND vs Sortformer~~ → **Resolved:** live streaming uses **LS-EEND** — FluidAudio's long-form streaming end-to-end neural diarizer — maintaining a continuous frame-level speaker timeline decoupled from the ASR VAD segmentation. This replaced the original per-segment embedding-clustering approach, which collapsed distinct speakers whenever a VAD segment blended several voices (the whole-segment embedding was not discriminative). Sortformer (4-speaker cap, steadier identities) remains a possible alternative. (FluidAudio model-download footprint of always-linking the diarization assets is still open.)
 8. **Separate-track audio output:** Whether to expose the internal mic/system separation as user-facing audio output (e.g. dual files or L/R channels), beyond its use for transcript attribution. Currently scoped out (see §4.2).
-9. **Remote control (deferred):** Transport/protocol (local socket, files in the working `directory`, or network), auth, and exposed operations are open. The `directory` setting (§6.1) is the first building block; the rest is Post-MVP.
+9. ~~**Remote control (deferred):** Transport/protocol, auth, and exposed operations are open.~~ → **Resolved into scope (M8, §6.10):** transport is **HTTP/1.1 + JSON over TCP**, loopback by default with `[interface:]port` override; operations are **flat control verbs** (`GET /status`, `POST /start|/pause|/resume|/stop`) over a **single active session** (control + status only — no content download); outputs resolve under the working `directory`; clients are external (documented protocol + a Tampermonkey Google-Meet reference userscript). **Still open:** hardened **non-loopback auth** beyond the bearer-token gate (TLS, allow-lists); and whether to later allow **concurrent sessions** (currently rejected with `409`). (Conventional loopback port resolved to **8473**.) Scheduled/unattended and cross-host control remain Post-MVP (§4.2).
+10. ~~**Interactive pause × `--split` (§6.9):** force a chunk boundary on pause, or leave a gap inside the current chunk?~~ → **Resolved:** pause **drops captured chunks entirely**, so the byte-clock simply gaps — `--split` opens **no** new chunk while paused and the current chunk continues on resume. (Both interactive and the remote agent share this; the chunk boundary tracks captured audio, not wall-clock.)
 
 ### Resolved (2026-06-12)
 - ~~Language/stack~~ → **Swift**, single binary, SwiftPM modular targets.
@@ -411,4 +480,4 @@ Speaker labeling answers "who said what." It is **opt-in** via `--speakers`/`--d
 ---
 
 **Document Status:** Draft for review
-**Next Steps:** Fill in Author field; review drafted acceptance criteria (US01–US07); decide crash-resilience strategy (Open Question 1).
+**Next Steps:** Fill in Author field; review drafted acceptance criteria (US01–US11); decide crash-resilience strategy (Open Question 1); confirm the remaining M8 remote-control details (default port, non-loopback auth — Open Question 9).

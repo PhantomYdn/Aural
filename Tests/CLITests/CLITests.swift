@@ -67,6 +67,8 @@ struct RootParsingTests {
         ["--speakers", "--speaker-threshold", "1.5"],  // out of (0,1]
         ["--vad-threshold", "0"],                      // out of (0,1]
         ["--vad-threshold", "1.5"],                    // out of (0,1]
+        ["--interactive", "-i", "f.wav"],              // interactive is live-only
+        ["--interactive", "-a", "-"],                  // interactive owns the terminal
     ])
     func rejectsInvalidCombinations(_ arguments: [String]) {
         #expect(throws: (any Error).self) {
@@ -106,6 +108,9 @@ struct RootParsingTests {
         ["--max-speakers", "2"], ["--diarize-engine", "offline"],
         ["-i", "x.wav", "--speakers"],                          // batch diarization
         ["-i", "x.wav", "--speakers", "--speaker-mode", "acoustic", "--diarize-engine", "offline"],
+        ["--interactive"],                                      // live UI, transcript to terminal
+        ["--interactive", "-a", "rec.m4a"],                     // record + interactive transcript view
+        ["--interactive", "--system", "--mix"],                 // interactive meeting capture
     ])
     func acceptsValidCombinations(_ arguments: [String]) throws {
         _ = try Aural.parse(arguments)

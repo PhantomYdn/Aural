@@ -93,6 +93,15 @@ aural models download fluidaudio:diarizer
 On Intel Macs, acoustic diarization is unavailable; diarized modes fall back to
 deterministic `You`/`Others` source attribution (which needs no model).
 
+## Interactive & remote control (`--interactive`, `--remote-control`)
+
+Neither mode needs a new TCC permission — a recording started interactively or
+through the remote-control agent uses the **same** microphone / system-audio
+permissions as a normal capture (above). The remote-control agent's HTTP
+listener is loopback-only by default (no network exposure); binding it to a
+non-loopback interface is opt-in and requires `$AURAL_REMOTE_TOKEN`. See
+[remote-control.md](remote-control.md).
+
 ## Multiplexers (tmux, screen)
 
 Permission attribution resolves through tmux/screen to the terminal that

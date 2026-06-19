@@ -99,6 +99,11 @@ output transcribes to stdout.
 (1/2), `--duration SEC`, `--split duration=SEC` / `--split silence=SEC`
 (with `--silence-threshold dBFS`).
 
+**Working directory**: `-C, --directory PATH` resolves **relative** artifact
+paths (`-i`, `-a`, `-t`, and `--split` outputs) against `PATH` (absolute paths
+and `-` are unaffected). Defaults to the current directory; also
+`$AURAL_DIRECTORY` or config `directory`. The directory must already exist.
+
 **Transcription**: `-e/--engine`, `--model` (engine-specific — see
 [Models](#models)), `--language` (`auto`, or a code; support varies by engine),
 `--translate` / `--no-translate`, `--transcript-format txt|srt|json`.
@@ -160,6 +165,47 @@ diarized modes fall back to `You`/`Others`); the first use downloads a CoreML
 model — pre-fetch with `aural models download fluidaudio:diarizer`. Live
 segmentation also uses an on-device VAD model (Apple Silicon); disable it with
 `AURAL_VAD=0`.
+
+### Interactive mode
+
+`--interactive` runs a live capture in a minimal terminal UI: the transcript
+streams to the terminal, a startup status line shows the resolved
+engine/source/format, and single keys control the session:
+
+- **space** — pause / resume (the paused interval is **not** recorded, so the
+  output is shorter than wall-clock)
+- **Enter** — finish and finalise the file (Ctrl-C also stops)
+
+```sh
+# Interactive meeting capture: watch the transcript, pause during a break
+aural --interactive --system --mix -a meeting.m4a
+```
+
+Interactive mode needs a real terminal (stdin + stdout are a TTY) and can't be
+combined with `-i` or stdout output (`-a -`/`-t -`).
+
+### Remote control
+
+`aural --remote-control [host:]port` runs Aural as a control **agent** instead
+of capturing on launch, serving a small HTTP/JSON API so scripts (or a browser
+userscript) can start/pause/resume/stop/query a recording. One recording at a
+time; the API is control + status only (artifacts are written to files, never
+returned over HTTP).
+
+```sh
+# Loopback agent (conventional port 8473), recordings under ~/Recordings
+aural --remote-control 8473 -C ~/Recordings
+
+curl -s -X POST http://127.0.0.1:8473/start \
+  -d '{"system":true,"mix":true,"audio":"call.m4a","transcript":"call.srt"}'
+curl -s http://127.0.0.1:8473/status
+curl -s -X POST http://127.0.0.1:8473/stop
+```
+
+Bound to loopback by default; a non-loopback bind requires `$AURAL_REMOTE_TOKEN`.
+Launch-time capture flags become per-session defaults. Full API reference and a
+Tampermonkey Google-Meet auto-record userscript:
+[docs/remote-control.md](docs/remote-control.md).
 
 ### Subcommands
 
@@ -234,6 +280,7 @@ and `capture-backend` (`$AURAL_CAPTURE`).
 | `language` | `--language` | `auto` |
 | `translate` | `--translate`/`--no-translate` | `false` |
 | `device` | `-d/--device` | system default |
+| `directory` | `-C/--directory` | current directory |
 | `capture-backend` | `--capture-backend` | `auto` |
 | `rate` / `bits` / `channels` | `-r` / `-b` / `-c` | live `44100`/`16`; convert = source |
 | `silence-threshold` | `--silence-threshold` | `-50` |

@@ -251,6 +251,22 @@ struct Aural: ParsableCommand {
         """)
     var raw = false
 
+    @Flag(name: .customLong("interactive"), help: """
+        Live: run in a minimal terminal UI showing the transcript, with \
+        single-key controls — space to pause/resume (the paused interval is \
+        not recorded), Enter to finish (Ctrl-C also stops). Needs a terminal; \
+        not combined with -i or stdout output.
+        """)
+    var interactive = false
+
+    @Option(name: .customLong("remote-control"), help: ArgumentHelp(
+        "Run as a control agent (no immediate capture): serve a small HTTP/JSON "
+            + "API on [host:]port so scripts can start/stop/pause/resume/query a "
+            + "recording (default host 127.0.0.1, e.g. 8473 or 0.0.0.0:8473). "
+            + "Non-loopback binds require $AURAL_REMOTE_TOKEN. See docs/remote-control.md.",
+        valueName: "[host:]port"))
+    var remoteControl: String?
+
     @Flag(name: .customLong("no-output"), help: ArgumentHelp(
         "Capture but write nothing (dry run).", visibility: .hidden))
     var noOutput = false
@@ -323,6 +339,33 @@ struct Aural: ParsableCommand {
         }
         if input != nil && split != nil {
             throw ValidationError("--split applies to live capture; it has no effect with -i/--input.")
+        }
+
+        // Interactive mode is a live-capture terminal UI: it can't read a file
+        // and it owns the terminal, so it can't also stream to stdout. (The TTY
+        // requirement itself is checked at runtime so it stays unit-testable.)
+        if interactive {
+            if input != nil {
+                throw ValidationError(
+                    "--interactive is for live capture; it can't be combined with -i/--input.")
+            }
+            if audio == "-" {
+                throw ValidationError(
+                    "--interactive uses the terminal for the transcript; it can't also stream audio to stdout (-a -).")
+            }
+        }
+
+        // Remote-control runs an agent instead of capturing on launch, so it
+        // can't combine with the interactive UI or a file input. (Launch-time
+        // capture flags are allowed — they become per-session defaults.)
+        if remoteControl != nil {
+            if interactive {
+                throw ValidationError("--remote-control and --interactive are mutually exclusive.")
+            }
+            if input != nil {
+                throw ValidationError(
+                    "--remote-control starts an agent; it can't be combined with -i/--input.")
+            }
         }
 
         // Live source combinations.
@@ -431,6 +474,13 @@ struct Aural: ParsableCommand {
             let settings = try ResolvedSettings.resolve(from: self)
             try settings.validate()
             try settings.applyWorkingDirectory()
+            // Remote-control agent (PRD §6.10): serve the control API instead of
+            // capturing on launch. Per-session output paths resolve under the
+            // working directory just applied.
+            if let address = remoteControl {
+                try RemoteControlAgent(defaults: self, address: address).run()
+                return
+            }
             let outputs = try resolveOutputs()
             if let input {
                 try runFileInput(input, outputs: outputs, settings: settings)
@@ -454,6 +504,17 @@ struct Aural: ParsableCommand {
                 throw AuralExitCode.software.exitCode
             }
         }
+    }
+
+    /// Programmatic live-capture entry for the remote-control agent (PRD §6.10):
+    /// resolves settings and runs the live pipeline with an injected control,
+    /// throwing `AuralError`/`TranscriptionError` for the agent to map to HTTP.
+    /// The working directory is already applied by the agent at launch.
+    func executeLive(control: CaptureControl) throws {
+        let settings = try ResolvedSettings.resolve(from: self)
+        try settings.validate()
+        let outputs = try resolveOutputs()
+        try runLiveInput(outputs: outputs, settings: settings, externalControl: control)
     }
 
     // MARK: Output resolution
@@ -489,6 +550,9 @@ struct Aural: ParsableCommand {
             transcriptDest = .file(transcript)
         } else if audio == nil {
             transcriptDest = .stdout  // default verb: transcribe to stdout
+        } else if interactive {
+            // Record-only + interactive: still show the transcript in the UI.
+            transcriptDest = .stdout
         } else {
             transcriptDest = nil
         }
@@ -497,7 +561,21 @@ struct Aural: ParsableCommand {
 
     // MARK: Live capture
 
-    private func runLiveInput(outputs: ResolvedOutputs, settings: ResolvedSettings) throws {
+    private func runLiveInput(
+        outputs: ResolvedOutputs, settings: ResolvedSettings,
+        externalControl: CaptureControl? = nil
+    ) throws {
+        // Interactive mode (PRD §6.9) needs a real terminal: stdin for keys,
+        // stdout for the transcript. Checked here (not in validate()) so the
+        // arg-combination rules stay unit-testable off a TTY; checked before the
+        // engine preflight so the terminal requirement fails fast.
+        if interactive {
+            guard isatty(STDIN_FILENO) != 0, isatty(STDOUT_FILENO) != 0 else {
+                throw AuralError.usage(
+                    "--interactive needs an interactive terminal (stdin and stdout must be a TTY).")
+            }
+        }
+
         // Fail fast on unwritable audio formats before any permission prompts.
         if case .file(let path)? = outputs.audio {
             let fileFormat = try resolveAudioFileFormat(path: path)
@@ -521,11 +599,31 @@ struct Aural: ParsableCommand {
                 language: settings.language, translate: settings.translate)
         }
 
-        let captureEngine = CaptureEngine(
+        var captureEngine = CaptureEngine(
             deviceUID: settings.micDevice, rate: settings.rate ?? 44100, bits: settings.bits ?? 16,
             channels: settings.channels, captureSystem: captureSystem, apps: apps,
             excludeApps: excludeApps, mix: mix, captureBackend: settings.captureBackend)
         let (session, format, sourceLabel) = try captureEngine.makeCapture()
+
+        // Startup status (PRD §6.8): summarise the resolved configuration on
+        // stderr (when a TTY, or with -v) before capture begins.
+        StartupStatus.emit(liveStatusText(
+            settings: settings, source: sourceLabel, format: format, outputs: outputs))
+
+        // Controls: interactive (PRD §6.9) shares a CaptureControl between the
+        // key reader and the capture loop; the remote-control agent (PRD §6.10)
+        // injects its own control. Both pause/resume/stop the same loop.
+        var interactiveSession: InteractiveSession?
+        if interactive {
+            let control = CaptureControl()
+            captureEngine.control = control
+            let ui = InteractiveSession(control: control)
+            ui.start()
+            interactiveSession = ui
+        } else if let externalControl {
+            captureEngine.control = externalControl
+        }
+        defer { interactiveSession?.stop() }
 
         let metadata = WAVMetadata(
             creationDate: Date(), software: "aural 0.1.0", title: sourceLabel)
@@ -583,7 +681,7 @@ struct Aural: ParsableCommand {
                 useVad: settings.useVad, vadThreshold: settings.vadThreshold, useGain: settings.useGain)
             sinks.append(transcriber)
             liveTranscriber = transcriber
-            if outputs.audio == nil && duration == nil {
+            if !interactive && externalControl == nil && outputs.audio == nil && duration == nil {
                 Log.notice("listening — press Ctrl+C to stop")
             }
         }
@@ -808,6 +906,37 @@ struct Aural: ParsableCommand {
             engineName: settings.engine, modelFlag: model, language: settings.language,
             translate: settings.translate, format: format
         ).write(rendered, to: transcriptDest)
+    }
+
+    /// Builds the §6.8 startup-status text for a live capture from the resolved
+    /// settings, the capture source label/format, and the chosen outputs.
+    private func liveStatusText(
+        settings: ResolvedSettings, source: String, format: PCMFormat, outputs: ResolvedOutputs
+    ) -> String {
+        let tapMode = captureSystem || !apps.isEmpty || !excludeApps.isEmpty
+        let audioDesc: String?
+        switch outputs.audio {
+        case .none: audioDesc = nil
+        case .stdoutWav: audioDesc = "stdout (wav stream)"
+        case .stdoutRaw: audioDesc = "stdout (raw pcm)"
+        case .file(let path): audioDesc = path + (split.map { " (split \($0))" } ?? "")
+        }
+        let transcriptDesc: String?
+        switch outputs.transcript {
+        case .none: transcriptDesc = nil
+        case .stdout: transcriptDesc = "stdout (\(transcriptFormat(for: .stdout).rawValue))"
+        case .file(let path):
+            transcriptDesc = "\(path) (\(transcriptFormat(for: .file(path)).rawValue))"
+        }
+        let speakersDesc: String? = settings.speakers
+            ? "\(settings.speakerMode.rawValue) (\(settings.speakerLabels.you)/\(settings.speakerLabels.others))"
+            : nil
+        return StartupStatus.render(
+            engine: settings.engine, model: model, language: settings.language,
+            translate: settings.translate, source: source,
+            captureBackend: tapMode ? settings.captureBackend : nil,
+            format: format, audio: audioDesc, transcript: transcriptDesc,
+            speakers: speakersDesc, vad: settings.useVad, duration: duration, split: split)
     }
 
     // MARK: File input (transcode and/or transcribe)

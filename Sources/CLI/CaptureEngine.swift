@@ -23,6 +23,10 @@ struct CaptureEngine {
     let mix: Bool
     /// System/app capture backend: "auto", "sckit", or "coreaudio".
     var captureBackend: String = "auto"
+    /// Optional external control (interactive keys / remote agent): pause drops
+    /// captured chunks (a true gap); stop ends capture like a signal. nil for
+    /// the plain one-shot CLI path.
+    var control: CaptureControl? = nil
 
     /// Builds the capture session, output PCM format, and a human-readable
     /// source label for the requested source.
@@ -104,9 +108,13 @@ struct CaptureEngine {
         // addition to the mixed stream. The session delivers these on its IO
         // thread; sink writes are forwarded directly (errors surface later via
         // each sink's own error path).
-        if !sourceSinks.isEmpty, var multi = session as? MultiTrackCaptureSession {
+        let control = self.control
+        if !sourceSinks.isEmpty, let multi = session as? MultiTrackCaptureSession {
             let routes = sourceSinks
             multi.onSourceAudio = { source, data in
+                // Paused capture drops per-source chunks too, so attribution
+                // tracks gap in lock-step with the mixed stream.
+                if control?.isPaused == true { return }
                 for (tag, sink) in routes where tag == source {
                     try? sink.write(data)
                 }
@@ -139,6 +147,10 @@ struct CaptureEngine {
         do {
             try session.start { data in
                 ioQueue.async {
+                    // Paused (interactive/remote): drop the chunk entirely — no
+                    // write, no duration budget consumed — so the output holds a
+                    // true gap and --duration still counts only captured audio.
+                    if control?.isPaused == true { return }
                     silenceDetector?.observe(data)
                     let (chunk, exhausted) = budget?.consume(data) ?? (data, false)
                     if !chunk.isEmpty {
@@ -162,6 +174,9 @@ struct CaptureEngine {
             Log.verbose("signal received, stopping")
             done.signal()
         }
+        // An external stop (interactive Enter / remote /stop) wakes the same
+        // wait loop as a signal.
+        control?.setStopHandler { done.signal() }
         let startedAt = Date()
         done.wait()
         watcher.cancel()

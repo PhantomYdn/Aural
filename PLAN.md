@@ -295,18 +295,78 @@
 > A git-`-C`-style base directory for resolving **relative** artifact paths,
 > defaulting to the process CWD. Foundation for headless/remote operation.
 
-- [ ] Add the `directory` config setting: registry entry (`Configuration`/`Settings`) with a `config show` summary/DESCRIPTION; env var `$AURAL_DIRECTORY`; `ResolvedSettings` precedence flag › env › config › CWD
-- [ ] Add the `--directory`/`-C PATH` root option (ArgumentParser); validate the path is an existing directory (usage error otherwise; never auto-create)
-- [ ] Resolve **relative** root-verb artifact paths against the working directory — `-i`, `-a`, `-t`, and `--split` outputs — leaving absolute paths, `-` (stdin/stdout), and Aural's own state (`~/.aural/…` config + models) untouched. Subcommand positionals (e.g. `info <file>`) keep using the process CWD for now
-- [ ] Add the precedence-table row to docs + `config show` (working directory → `--directory`/`-C` › `$AURAL_DIRECTORY` › `directory` › CWD)
-- [ ] Tests: precedence resolution (flag/env/config/default); relative paths rebased vs absolute untouched; `-`/stdin/stdout unaffected; missing-directory usage error
-- [ ] Docs: README + man (`--directory`/`-C`, `$AURAL_DIRECTORY`, config key `directory`); note it as the remote-control foundation (PRD §4.2)
+- [x] Add the `directory` config setting: registry entry (`Configuration`/`Settings`) with a `config show` summary/DESCRIPTION; env var `$AURAL_DIRECTORY`; `ResolvedSettings` precedence flag › env › config › CWD
+- [x] Add the `--directory`/`-C PATH` root option (ArgumentParser); validate the path is an existing directory (usage error otherwise; never auto-create) — `ResolvedSettings.applyWorkingDirectory`
+- [x] Resolve **relative** root-verb artifact paths against the working directory — `-i`, `-a`, `-t`, and `--split` outputs — leaving absolute paths, `-` (stdin/stdout), and Aural's own state (`~/.aural/…` config + models) untouched. Subcommand positionals (e.g. `info <file>`) keep using the process CWD for now
+- [x] Add the precedence-table row to `config show` + PRD §6.1 precedence table (working directory → `--directory`/`-C` › `$AURAL_DIRECTORY` › `directory` › CWD)
+- [x] Tests: precedence resolution (flag/env/config/default); missing-directory usage error (`ResolvedSettingsTests.directoryResolves…`/`applyWorkingDirectoryValidatesExistence`)
+- [x] Docs: README (`-C/--directory`, `$AURAL_DIRECTORY`, config key `directory`) + man (`--directory`, `AURAL_DIRECTORY`); noted as the remote-control foundation (done alongside Phase 10.4)
+
+## Phase 10: Status, Interactive & Remote Control (PRD M8, §6.8–§6.10)
+
+> Adds an at-a-glance startup status (§6.8), an interactive live-capture UI with
+> pause(gap)/resume/stop (§6.9), and an on-demand remote-control agent exposing a
+> control-only HTTP/JSON API (§6.10). Depends on M4 (live transcription, done)
+> and Phase 9 (working directory) — the agent resolves output "where" under the
+> working `directory`, so Phase 9 lands first. Reuses existing patterns: stderr
+> `Log`/`isatty` (TranscribeEngine.swift:87), `ResolvedSettings`, the
+> `CaptureEngine.run` capture loop + `SignalWatcher`, and loopback-HTTP know-how
+> from `WhisperServerEngine`. The HTTP server is the embedded FlyingFox SwiftPM
+> dependency (statically linked; nothing for users to install).
+
+### Phase 10.0 — Spec & docs (PRD first)
+
+- [x] PRD §6.8/§6.9/§6.10 + FR rows 21–23, §4.2 reconcile, US09–11, §7 NFR, §8 metrics, §9 M8, §10 Open Qs (Q9 resolved-into-scope, Q10 pause×split)
+- [x] PRD §6.10 revision: replaced the `/recordings/{id}` REST design with **flat single-session control verbs** (`POST /start|/stop|/pause|/resume`, `GET /status`); single active session (parallel `/start` rejected); API is **control + status only** — never serves transcript/audio content (artifacts retrieved from the working `directory`)
+- [x] Add the FlyingFox SwiftPM dep to Package.swift (FlyingFox + FlyingSocks, embedded/static; nothing for users to install); MIT recorded in NOTICES
+- [ ] README/man deferred to 10.4 (kept with the feature's other user-facing docs)
+
+### Phase 10.1 — Startup status summary (§6.8)
+
+- [x] `StartupStatus` renderer (`StartupStatus.swift`): concise block from `ResolvedSettings` + resolved source/outputs (engine, model, language/translate, source + capture backend, format rate/bits/channels, output destinations, speaker mode, VAD, duration/split) via `Aural.liveStatusText`
+- [x] Visibility gating: `StartupStatus.shouldShow` shows on stderr when `isatty(STDERR_FILENO)`, always with `-v`, suppressed when stderr is redirected; written via stderr only (never stdout)
+- [x] Wire into `runLiveInput` before capture starts (after `makeCapture`); existing `Log.verbose("source: …")` lines kept
+- [x] Tests: field rendering (present/omitted) + gating decision (`StartupStatusTests`)
+
+### Phase 10.2 — Capture-control core + interactive mode (§6.9)
+
+- [x] Capture-control core (`CaptureControl.swift`): `CaptureEngine.run` gains an optional `control`; pause drops chunks in both the mixed IO callback and `onSourceAudio` (true gap, no `--duration` budget consumed); `stop()` wakes the wait loop alongside `SignalWatcher`
+- [x] Pause omits audio AND transcript: paused chunks never reach the sinks/segmenter, so the byte-clock gaps automatically for both the recording and the transcript
+- [x] `--interactive` flag + validation: live-only (rejects `-i`) and rejects `-a -`; runtime TTY guard in `runLiveInput` (stdin+stdout must be a TTY); record-only `--interactive` forces the transcript to the terminal (`resolveOutputs`)
+- [x] Terminal cbreak mode (termios, VMIN=0/VTIME=1) with guaranteed restore on stop/deinit; single-key reader (**space**=pause/resume, **Enter**=finish; Ctrl-C still stops) — `InteractiveSession.swift`
+- [x] Minimal TTY UI: status header (10.1) on stderr + live transcript on stdout (rendered even without `-t`) + control hints/notices on stderr (no pinned footer, per decision)
+- [x] Tests: `CaptureControl` state machine (pause→resume→stop, idempotent, late stop-handler), `--interactive` accept/reject combos, interactive output resolution (`InteractiveTests`)
+- [ ] Live-capture e2e of interactive pause/resume/stop (real mic/system) — on the pending-live list (can't run permission-free)
+
+### Phase 10.3 — Remote-control agent (§6.10)
+
+- [x] `--remote-control [host:]port` flag (`RemoteControlAgent`): parse `[host:]port`, loopback default (conventional port 8473); modal (starts agent, no immediate capture); launch capture flags become per-session defaults; mutually exclusive with `--interactive`/`-i`
+- [x] FlyingFox HTTP server bound to the resolved IPv4 address; loopback default; refuse non-loopback bind without `$AURAL_REMOTE_TOKEN`; bearer-token check per request when a token is configured; prints bound address to stderr; graceful SIGINT/SIGTERM shutdown
+- [x] `RemoteSessionManager` (single active session): `POST /start` while one is active → `409 Conflict`; control verbs act on the current session; capture driven via the 10.2 `CaptureControl`; outputs resolved under the working directory; full parity (`StartRequest.makeCommand` = launch defaults + overrides → same `Aural.executeLive` pipeline, incl. `--speakers`)
+- [x] Endpoints (flat, control + status only — never serve file content): `GET /status` (state/elapsed/output paths); `POST /start` (JSON body mirrors CLI flags/outputs over launch defaults, e.g. `{"transcript":"notes.txt","audio":"rec.m4a","system":true}`) → `{id,state,audio,transcript}`; `POST /stop`; `POST /pause`; `POST /resume`
+- [x] Error mapping: AuralError/exit codes → HTTP status (permission→403, bad params→400, engine/model missing→404/422, busy→409, transcription→422) with JSON `{error}`
+- [x] Tests: address+token parsing, `StartRequest.makeCommand` overrides/validation, single-session 409 + lifecycle (`RemoteSessionManager`), exit-code→HTTP mapping (`RemoteControlTests`); verified live via curl (status/start/pause/resume/stop, 401/403/409/400/404, real mic capture)
+- [ ] Live-capture e2e of agent-driven start/stop with system audio + speakers (real meeting) — on the pending-live list
+
+### Phase 10.4 — Userscript reference & user-facing docs
+
+- [x] `docs/remote-control.md`: HTTP API reference (endpoints, JSON shapes, status codes, token/auth, loopback default, single-session rule, control-only scope)
+- [x] Tampermonkey Google-Meet reference userscript (in `docs/remote-control.md`): detects call join/leave on `meet.google.com`, `GM_xmlhttpRequest` to the loopback agent (`POST /start` on join with a filename from meeting title + date, `POST /stop` on leave/unload)
+- [x] README "Interactive mode" + "Remote control" sections + `-C/--directory` + `directory` config row; man page `--interactive`/`--remote-control`/`--directory` + `AURAL_DIRECTORY`/`AURAL_REMOTE_TOKEN` + examples (mandoc lint clean)
+- [x] docs/permissions.md: agent needs no new TCC (same capture permissions); listener is loopback-only by default
+
+### Phase 10.5 — Validation
+
+- [x] NFR (§7): API control round-trip measured ~0.5–1.5 ms on loopback (≪ 200 ms target); pause/resume takes effect within one capture buffer (drop-on-paused). Live speaker-label latency unchanged from Phase 8
+- [ ] Metric (§8): Tampermonkey recipe records + names a Meet call end-to-end (gated/manual — needs a browser + Meet)
+- [x] Gated steps added to `Scripts/verify-live.sh`: [7] interactive non-TTY guard, [8] remote-control start/409/stop lifecycle (mic-permission → SKIP). Interactive keypress e2e + agent-with-system remain manual (pending-live)
+- [x] Resolve Open Q10 (pause × `--split`): pause drops chunks → gap within the current chunk, no new file; deterministic test `CaptureControlIntegrationTests.pausedAudioIsDropped`
 
 ## Future
 
 > Nice-to-have items outside current scope.
 
-- [ ] Daemon/agent mode: launchd-managed background service for scheduled recording with IPC (PRD §4.2)
+- [ ] Scheduled/unattended launchd daemon: background service that *schedules* recordings and survives logout, building on the Phase 10 remote-control agent (PRD §4.2)
 - [ ] Crash resilience for hard kills: periodic header flush vs `aural repair` subcommand (parked — PRD Open Q1)
 - [ ] Opt-in telemetry mechanism for crash-free-rate KPI (PRD Open Q3)
 - [ ] Real-time streaming to network socket or HTTP endpoint
@@ -317,4 +377,4 @@
 - [ ] Silence-based voice activity detection for trimming
 - [ ] Named speaker identification: voiceprint enrollment + local speaker store (FluidAudio embeddings) (PRD §4.2 / Open Q5)
 - [ ] Overlapping-speech handling / per-word speaker assignment (PRD Open Q6)
-- [ ] Remote control: control Aural from another process/host (start/stop/configure captures); the working `directory` anchors control/state artifacts (PRD §4.2 / Open Q9)
+- [ ] Cross-host & authenticated remote control beyond the loopback default (token/TLS, allow-lists) (PRD §4.2 / Open Q9 — base agent is Phase 10)
