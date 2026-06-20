@@ -3,7 +3,7 @@ class Aural < Formula
   homepage "https://github.com/PhantomYdn/Aural"
   url "https://github.com/PhantomYdn/Aural/releases/download/v0.1.0/aural-0.1.0-macos-arm64.tar.gz"
   version "0.1.0"
-  sha256 "0000000000000000000000000000000000000000000000000000000000000000"
+  sha256 "d77a375a40ae75bb7708c528c436231ed182ca4f85e8fdcea78d2878f9272c81"
   license "MIT"
 
   # Prebuilt Apple Silicon binary; Intel users build from source (see README).
