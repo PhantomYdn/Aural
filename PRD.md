@@ -3,7 +3,7 @@
 ## Product: Aural
 **Version:** 1.0 (MVP)
 **Date:** 2026-06-12
-**Author:** TBD
+**Author:** Ilya Naryzhnyy
 
 ---
 
@@ -480,5 +480,5 @@ Speaker labeling answers "who said what." It is **opt-in** via `--speakers`/`--d
 
 ---
 
-**Document Status:** Draft for review
-**Next Steps:** Fill in Author field; review drafted acceptance criteria (US01–US11); decide crash-resilience strategy (Open Question 1); confirm the remaining M8 remote-control details (default port, non-loopback auth — Open Question 9).
+**Document Status:** MVP implemented; v0.1.0 beta release.
+**Next Steps:** Post-beta — code signing + notarization for direct downloads; long-run reliability (24 h) and CPU performance validation; homebrew-core submission for bare `brew install aural`; decide crash-resilience strategy (Open Question 1).

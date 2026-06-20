@@ -1,0 +1,101 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+# Needed to create the GitHub Release and push the formula bump back to main.
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build, package & publish (macOS arm64)
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode (Swift 6)
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: Resolve version
+        id: version
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tarball=aural-$VERSION-macos-arm64.tar.gz" >> "$GITHUB_OUTPUT"
+
+      - name: Build release
+        run: swift build -c release
+
+      - name: Verify binary
+        run: |
+          BIN=.build/release/aural
+          test -x "$BIN"
+          "$BIN" --version
+          "$BIN" --version | grep -qx "${{ steps.version.outputs.version }}"
+
+      - name: Package tarball
+        id: package
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          TARBALL="${{ steps.version.outputs.tarball }}"
+          STAGE="dist/aural-$VERSION"
+          mkdir -p "$STAGE"
+          cp .build/release/aural "$STAGE/"
+          cp man/aural.1 "$STAGE/"
+          cp LICENSE NOTICES README.md CHANGELOG.md "$STAGE/"
+          tar -czf "$TARBALL" -C dist "aural-$VERSION"
+          SHA="$(shasum -a 256 "$TARBALL" | awk '{print $1}')"
+          echo "sha256=$SHA" >> "$GITHUB_OUTPUT"
+          echo "Packaged $TARBALL ($SHA)"
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          TARBALL="${{ steps.version.outputs.tarball }}"
+          {
+            echo "Apple Silicon (arm64) build. Install with Homebrew:"
+            echo
+            echo '```sh'
+            echo "brew tap PhantomYdn/aural https://github.com/PhantomYdn/Aural"
+            echo "brew install aural"
+            echo '```'
+            echo
+            echo "This beta binary is not yet notarized. A direct download must be"
+            echo "de-quarantined (\`xattr -dr com.apple.quarantine ./aural\`); Homebrew"
+            echo "installs do not need this. Requires macOS 14.4+ and, for the default"
+            echo "\`whisper\` engine, \`brew install whisper-cpp\`."
+            echo
+            echo "See [CHANGELOG.md](https://github.com/PhantomYdn/Aural/blob/main/CHANGELOG.md) for details."
+          } > release-notes.md
+          gh release create "$GITHUB_REF_NAME" "$TARBALL" \
+            --title "Aural $VERSION" \
+            --notes-file release-notes.md
+
+      - name: Bump Homebrew formula on main
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          SHA="${{ steps.package.outputs.sha256 }}"
+          URL="https://github.com/PhantomYdn/Aural/releases/download/v$VERSION/aural-$VERSION-macos-arm64.tar.gz"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git fetch origin main
+          git checkout main
+          sed -i '' -E "s#^  url \".*\"#  url \"$URL\"#" Formula/aural.rb
+          sed -i '' -E "s#^  version \".*\"#  version \"$VERSION\"#" Formula/aural.rb
+          sed -i '' -E "s#^  sha256 \".*\"#  sha256 \"$SHA\"#" Formula/aural.rb
+          if git diff --quiet Formula/aural.rb; then
+            echo "Formula already up to date."
+          else
+            git add Formula/aural.rb
+            git commit -m "release: aural $VERSION formula [skip ci]"
+            git push origin main
+          fi

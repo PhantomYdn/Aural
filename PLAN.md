@@ -159,16 +159,24 @@
 > dependencies (binary size / arch).
 
 - [x] Set up GitHub Actions CI: build + test on a macOS 14 (Apple-Silicon) runner with the Swift 6 toolchain (`.github/workflows/ci.yml`); gated integration tests skip without their tools so the suite stays green
-- [ ] Code signing and notarization so TCC permission flows work cleanly (PRD §7 Installability)
-- [ ] Create Homebrew formula; verify `brew install aural` end-to-end (US05)
 - [x] Write man page following POSIX utility conventions (`man/aural.1`; renders clean under mandoc)
 - [x] Write README: install, TCC permission setup, usage examples, engines, config/env precedence, exit codes (`README.md`)
-- [ ] Provide example scripts: meeting recording, transcription pipeline, cron/launchd setup
+- [x] Add `LICENSE` (MIT) and expand `NOTICES` with the statically-linked SwiftPM deps (Apache-2.0/MIT) alongside the vendored LGPL LAME; `CHANGELOG.md` for v0.1.0
+- [x] Provide example scripts: `examples/aural-meeting` (interactive system+mic → audio + transcript → fabric-ai summary), `aural-note`, `aural-dictate` (cron/launchd recipe deferred to the daemon work — see Future)
+- [x] Release automation: tag-triggered `.github/workflows/release.yml` builds `swift build -c release`, packages the arm64 binary + man/LICENSE/NOTICES, publishes a GitHub Release, and auto-bumps `Formula/aural.rb` (url+sha256)
+- [x] Homebrew (one-repo tap): `Formula/aural.rb` binary formula (`depends_on whisper-cpp`, arm64); `brew tap PhantomYdn/aural <url> && brew install aural`. Bare `brew install aural` (homebrew-core) deferred — needs notability + a stable release
+- [x] Fill PRD Author field (Ilya Naryzhnyy); acceptance criteria US01–US07 reviewed against the implementation (capture/transcode/engines/diarization/interactive/remote-control all shipped; live-capture e2e steps remain TCC/GUI-gated on the pending-live list)
+
+### Post-beta (deferred from v0.1.0)
+
+> Need an Apple Developer account, a hardware soak/measure session, or GUI/TCC
+> that CI can't provide. Tracked here so the beta isn't blocked on them.
+
+- [ ] Code signing and notarization so direct-download (non-Homebrew) TCC flows work cleanly without `xattr` (PRD §7 Installability) — needs a Developer ID + notary key as CI secrets
+- [ ] Submit to homebrew-core for bare `brew install aural` (after notability + a stable, non-beta release)
 - [ ] Validate unattended operation from cron/launchd after TCC grant (US05)
 - [ ] Reliability test: 24-hour continuous recording produces valid file on SIGINT/SIGTERM (PRD §7)
 - [ ] Performance validation: < 3% CPU on Apple Silicon at 16 kHz mono; buffering < 100 ms (PRD §7)
-- [ ] Release automation: GitHub Releases with binary artifacts; tag v1.0.0-beta
-- [ ] Fill PRD Author field and re-review acceptance criteria US01–US07 against implementation
 
 ## Phase 7: Hybrid system capture (ScreenCaptureKit + Core Audio)
 

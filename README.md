@@ -36,18 +36,42 @@ stdout). It is built for Unix-style pipelines and unattended use.
 
 ## Install
 
-Build from source with the Swift toolchain (Swift 6 / Xcode 16):
+### Homebrew (Apple Silicon)
 
 ```sh
-git clone <this-repo> aural && cd aural
+brew tap PhantomYdn/aural https://github.com/PhantomYdn/Aural
+brew install aural
+```
+
+This installs the prebuilt arm64 binary and the man page, and pulls in
+`whisper-cpp` for the default engine. Homebrew downloads aren't quarantined, so
+no Gatekeeper steps are needed.
+
+### Build from source (Intel, or to hack on it)
+
+With the Swift toolchain (Swift 6 / Xcode 16):
+
+```sh
+git clone https://github.com/PhantomYdn/Aural.git aural && cd aural
 make build                      # or: swift build -c release
 cp .build/release/aural /usr/local/bin/aural
 ```
 
-A signed, notarized release and a Homebrew formula are planned (see PLAN.md
-Phase 5). Until then the binary is unsigned, so macOS attributes its
-microphone / system-audio / speech permissions to the **terminal** that runs
-it — see [Permissions](#permissions).
+### Direct binary download
+
+The arm64 binary is also attached to each
+[GitHub Release](https://github.com/PhantomYdn/Aural/releases). This beta build
+is **not yet notarized**, so a direct download must be de-quarantined before it
+runs:
+
+```sh
+xattr -dr com.apple.quarantine ./aural
+```
+
+Because the binary is unsigned, macOS attributes its microphone / system-audio /
+speech permissions to the **terminal** that runs it — see
+[Permissions](#permissions). (Signed, notarized binaries are planned for a
+follow-up release; the Homebrew path above already works without these steps.)
 
 Install a transcription engine and model:
 

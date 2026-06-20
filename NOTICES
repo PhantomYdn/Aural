@@ -24,3 +24,25 @@ statically linked into the binary (nothing for users to install).
 
 FlyingFox is licensed under the MIT License. Copyright (c) 2022 Simon Whitty.
 See the project's LICENSE for the full text.
+
+SwiftPM dependencies (statically linked)
+----------------------------------------
+The release binary statically links the following Swift packages. Each is used
+under its own license; all are permissive (MIT or Apache-2.0).
+
+  swift-argument-parser (Apache-2.0) — https://github.com/apple/swift-argument-parser
+  WhisperKit / argmax-oss-swift (MIT) — https://github.com/argmaxinc/argmax-oss-swift
+  FluidAudio (Apache-2.0) — https://github.com/FluidInference/FluidAudio
+
+These pull in further permissive transitive dependencies (Apache-2.0:
+swift-asn1, swift-collections, swift-crypto, swift-jinja, swift-transformers;
+MIT: yyjson). The Apache-2.0 license is available at
+https://www.apache.org/licenses/LICENSE-2.0 and the MIT license at
+https://opensource.org/licenses/MIT; each project retains its own LICENSE and
+copyright notices.
+
+Runtime tools (not bundled)
+---------------------------
+The default `whisper` engine invokes an external whisper.cpp binary
+(`whisper-cli`/`whisper-server`, e.g. `brew install whisper-cpp`); it is not
+bundled with or linked into Aural.
