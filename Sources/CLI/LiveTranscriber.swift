@@ -24,6 +24,14 @@ final class LiveTranscriber: AudioSink, @unchecked Sendable {
     private let ownsBackend: Bool
     private let ownsWriter: Bool
 
+    // Interactive captions: when the transcript is persisted to a file the
+    // interactive UI gets nothing on stdout, so the live paths ask the
+    // transcriber to also echo each finalised segment (plain text, with the
+    // speaker label when set) to `screen` so captions still appear on-screen
+    // (PRD §6.9). Off by default; `screen` is injectable for tests.
+    private let screenEcho: Bool
+    private let screen: FileHandle
+
     private var totalBytes: UInt64 = 0
 
     // Transcription runs on a serial queue so segments are transcribed and
@@ -51,6 +59,8 @@ final class LiveTranscriber: AudioSink, @unchecked Sendable {
         useVad: Bool = true,
         vadThreshold: Double? = nil,
         useGain: Bool = true,
+        screenEcho: Bool = false,
+        screen: FileHandle = .standardOutput,
         pauseSeconds: Double = 0.7,
         maxWindowSeconds: Double = 12,
         minSegmentSeconds: Double = 0.4
@@ -62,6 +72,8 @@ final class LiveTranscriber: AudioSink, @unchecked Sendable {
         self.speaker = speaker
         self.resolver = resolver
         self.useGain = useGain
+        self.screenEcho = screenEcho
+        self.screen = screen
         self.language = language
         self.translate = translate
         self.format = captureFormat
@@ -95,6 +107,7 @@ final class LiveTranscriber: AudioSink, @unchecked Sendable {
         useVad: Bool = true,
         vadThreshold: Double? = nil,
         useGain: Bool = true,
+        screenEcho: Bool = false,
         pauseSeconds: Double = 0.7,
         maxWindowSeconds: Double = 12,
         minSegmentSeconds: Double = 0.4
@@ -106,7 +119,8 @@ final class LiveTranscriber: AudioSink, @unchecked Sendable {
             backend: backend, writer: writer, ownsBackend: true, ownsWriter: true, speaker: nil,
             language: language, translate: translate, captureFormat: captureFormat,
             silenceThresholdDBFS: silenceThresholdDBFS, labelName: "live transcript -> \(destination.label)",
-            useVad: useVad, vadThreshold: vadThreshold, useGain: useGain, pauseSeconds: pauseSeconds,
+            useVad: useVad, vadThreshold: vadThreshold, useGain: useGain, screenEcho: screenEcho,
+            pauseSeconds: pauseSeconds,
             maxWindowSeconds: maxWindowSeconds, minSegmentSeconds: minSegmentSeconds)
     }
 
@@ -125,6 +139,7 @@ final class LiveTranscriber: AudioSink, @unchecked Sendable {
         useVad: Bool = true,
         vadThreshold: Double? = nil,
         useGain: Bool = true,
+        screenEcho: Bool = false,
         pauseSeconds: Double = 0.7,
         maxWindowSeconds: Double = 12,
         minSegmentSeconds: Double = 0.4
@@ -134,7 +149,7 @@ final class LiveTranscriber: AudioSink, @unchecked Sendable {
             speaker: speaker, language: language, translate: translate, captureFormat: captureFormat,
             silenceThresholdDBFS: silenceThresholdDBFS, labelName: "live transcript [\(speaker)]",
             resolver: resolver, useVad: useVad, vadThreshold: vadThreshold, useGain: useGain,
-            pauseSeconds: pauseSeconds, maxWindowSeconds: maxWindowSeconds,
+            screenEcho: screenEcho, pauseSeconds: pauseSeconds, maxWindowSeconds: maxWindowSeconds,
             minSegmentSeconds: minSegmentSeconds)
     }
 
@@ -155,6 +170,14 @@ final class LiveTranscriber: AudioSink, @unchecked Sendable {
                 let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
                 if !trimmed.isEmpty && !Self.isNonSpeech(trimmed) {
                     try self.writer.append(text: trimmed, start: start, end: end, speaker: speaker)
+                    // Interactive captions: when the transcript is persisted to a
+                    // file the writer never reaches the UI, so mirror the plain
+                    // text (with the speaker label when set) to the screen so the
+                    // live transcript still appears on-screen (PRD §6.9).
+                    if self.screenEcho {
+                        let line = (speaker.map { "\($0): " } ?? "") + trimmed + "\n"
+                        try? self.screen.write(contentsOf: Data(line.utf8))
+                    }
                 }
             } catch {
                 _ = self.failure.store(error)

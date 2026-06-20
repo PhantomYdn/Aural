@@ -678,7 +678,10 @@ struct Aural: ParsableCommand {
                 engineName: settings.engine, modelFlag: model, language: settings.language,
                 translate: settings.translate,
                 captureFormat: format, silenceThresholdDBFS: settings.silenceThreshold,
-                useVad: settings.useVad, vadThreshold: settings.vadThreshold, useGain: settings.useGain)
+                useVad: settings.useVad, vadThreshold: settings.vadThreshold, useGain: settings.useGain,
+                // Interactive: a file destination never reaches the UI, so echo
+                // captions to the screen too (PRD §6.9).
+                screenEcho: interactive && transcriptDest.isFile)
             sinks.append(transcriber)
             liveTranscriber = transcriber
             if !interactive && externalControl == nil && outputs.audio == nil && duration == nil {
@@ -766,16 +769,21 @@ struct Aural: ParsableCommand {
             quiet: !Log.isVerbose)
         let backend = SerializedBackend(base)
 
+        // Interactive: a file destination never reaches the UI, so each side
+        // echoes its labeled captions to the screen too (PRD §6.9).
+        let echoToScreen = interactive && transcriptDest.isFile
         let micTranscriber = LiveTranscriber(
             sharedWriter: writer, sharedBackend: backend, speaker: labels.you,
             language: settings.language, translate: settings.translate,
             captureFormat: format, silenceThresholdDBFS: settings.silenceThreshold,
-            useVad: settings.useVad, vadThreshold: settings.vadThreshold, useGain: settings.useGain)
+            useVad: settings.useVad, vadThreshold: settings.vadThreshold, useGain: settings.useGain,
+            screenEcho: echoToScreen)
         let systemTranscriber = LiveTranscriber(
             sharedWriter: writer, sharedBackend: backend, speaker: labels.others,
             resolver: systemDiarizer, language: settings.language, translate: settings.translate,
             captureFormat: format, silenceThresholdDBFS: settings.silenceThreshold,
-            useVad: settings.useVad, vadThreshold: settings.vadThreshold, useGain: settings.useGain)
+            useVad: settings.useVad, vadThreshold: settings.vadThreshold, useGain: settings.useGain,
+            screenEcho: echoToScreen)
 
         let othersDesc = systemDiarizer != nil ? "Speaker N" : labels.others
         if outputs.audio == nil && duration == nil {
@@ -825,7 +833,9 @@ struct Aural: ParsableCommand {
             speaker: nil, language: settings.language, translate: settings.translate,
             captureFormat: format, silenceThresholdDBFS: settings.silenceThreshold,
             labelName: "live transcript [Speaker N]", resolver: diarizer,
-            useVad: settings.useVad, vadThreshold: settings.vadThreshold, useGain: settings.useGain)
+            useVad: settings.useVad, vadThreshold: settings.vadThreshold, useGain: settings.useGain,
+            // Interactive: echo captions to the screen too (PRD §6.9).
+            screenEcho: interactive && transcriptDest.isFile)
 
         if outputs.audio == nil && duration == nil {
             Log.notice("listening (speakers: Speaker N) — press Ctrl+C to stop")

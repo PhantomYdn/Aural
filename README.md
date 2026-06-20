@@ -179,10 +179,16 @@ engine/source/format, and single keys control the session:
 ```sh
 # Interactive meeting capture: watch the transcript, pause during a break
 aural --interactive --system --mix -a meeting.m4a
+
+# Same, but also persist the transcript — captions show on screen *and* go to
+# the file at the same time
+aural --interactive --system --mix -a meeting.m4a -t meeting.txt
 ```
 
-Interactive mode needs a real terminal (stdin + stdout are a TTY) and can't be
-combined with `-i` or stdout output (`-a -`/`-t -`).
+The live transcript is always shown on screen; naming `-t FILE`/`-a FILE`
+concurrently saves the transcript/audio. Interactive mode needs a real terminal
+(stdin + stdout are a TTY) and can't be combined with `-i` or stdout output
+(`-a -`/`-t -`).
 
 ### Remote control
 
@@ -345,6 +351,13 @@ aural -t notes.txt --system & tail -f notes.txt
 `aural` follows POSIX conventions: audio/transcripts on stdout, diagnostics on
 stderr (`-v` for detail), and a non-zero engine exit code propagates through the
 pipeline. SIGINT/SIGTERM finalize the current file so it stays playable.
+
+## Recipes
+
+Copy-and-adapt `zsh` wrappers for common workflows live in
+[`examples/`](examples/) — `aural-meeting` (interactive system+mic capture →
+audio + transcript, then a fabric-ai summary), `aural-note` (quick voice memo),
+and `aural-dictate` (speak → clipboard). See [examples/README.md](examples/README.md).
 
 ## Exit codes
 

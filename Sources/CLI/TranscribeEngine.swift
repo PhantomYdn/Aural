@@ -13,6 +13,14 @@ enum TranscriptDestination {
         case .file(let path): return path
         }
     }
+
+    /// True when the transcript is persisted to a file (as opposed to stdout).
+    /// Used to decide whether interactive mode must echo captions to the screen
+    /// separately (a file destination doesn't reach the UI on its own).
+    var isFile: Bool {
+        if case .file = self { return true }
+        return false
+    }
 }
 
 /// Transcription core: turns any readable audio file into a transcript and

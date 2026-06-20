@@ -981,6 +981,101 @@ struct StreamingDiarizationTests {
     }
 }
 
+@Suite("Interactive captions")
+struct InteractiveCaptionTests {
+    private let format = PCMFormat(sampleRate: 16000, bitsPerSample: 16, channels: 1)
+
+    private func loud(_ seconds: Double) -> Data {
+        let samples = Int(seconds * 16000)
+        var data = Data(capacity: samples * 2)
+        for i in 0..<samples {
+            withUnsafeBytes(of: Int16(i % 2 == 0 ? 16000 : -16000).littleEndian) {
+                data.append(contentsOf: $0)
+            }
+        }
+        return data
+    }
+    private func quiet(_ seconds: Double) -> Data { Data(count: Int(seconds * 16000) * 2) }
+
+    /// Builds a transcriber that persists to `transcriptPath` and (when
+    /// `screenEcho`) mirrors captions to `screenURL`, feeds one speech turn, and
+    /// returns (screen text, transcript-file text).
+    private func run(
+        screenEcho: Bool, speaker: String?, transcriptPath: String, screenURL: URL
+    ) throws -> (screen: String, file: String) {
+        setenv("AURAL_VAD", "0", 1)  // deterministic amplitude segmenter (offline)
+        FileManager.default.createFile(atPath: screenURL.path, contents: nil)
+        let screen = try FileHandle(forWritingTo: screenURL)
+
+        let writer = try LiveTranscriptWriter(destination: .file(transcriptPath), format: .txt)
+        let backend = SerializedBackend(FakeBackend("hello"))
+        let transcriber = LiveTranscriber(
+            backend: backend, writer: writer, ownsBackend: false, ownsWriter: false,
+            speaker: speaker, language: nil, translate: false, captureFormat: format,
+            silenceThresholdDBFS: -50, labelName: "t", useVad: false,
+            screenEcho: screenEcho, screen: screen,
+            pauseSeconds: 0.5, maxWindowSeconds: 2, minSegmentSeconds: 0.2)
+
+        try transcriber.write(loud(0.5)); try transcriber.write(quiet(0.5))
+        try transcriber.finalize(); try transcriber.rethrowErrors()
+        try writer.close()
+        backend.shutdown()
+        try screen.close()  // flush before reading
+
+        return (
+            try String(contentsOf: screenURL, encoding: .utf8),
+            try String(contentsOfFile: transcriptPath, encoding: .utf8)
+        )
+    }
+
+    /// PRD §6.9: interactive mirrors each segment to the screen while the
+    /// transcript writer still persists to the file (the labeled variant).
+    @Test func echoesLabeledCaptionToScreenWhileWritingFile() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("aural-caption-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let (screen, file) = try run(
+            screenEcho: true, speaker: "You",
+            transcriptPath: dir.appendingPathComponent("out.txt").path,
+            screenURL: dir.appendingPathComponent("screen.txt"))
+        #expect(screen.contains("You: hello"))  // shown on screen
+        #expect(file.contains("You: hello"))     // and persisted
+    }
+
+    /// Without a speaker the caption is plain text (no label prefix).
+    @Test func echoesPlainCaptionWhenNoSpeaker() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("aural-caption-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let (screen, file) = try run(
+            screenEcho: true, speaker: nil,
+            transcriptPath: dir.appendingPathComponent("out.txt").path,
+            screenURL: dir.appendingPathComponent("screen.txt"))
+        #expect(screen.contains("hello"))
+        #expect(!screen.contains(":"))  // no label prefix
+        #expect(file.contains("hello"))
+    }
+
+    /// With echo disabled the screen stays empty while the file is still written.
+    @Test func noScreenEchoWhenDisabled() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("aural-caption-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let (screen, file) = try run(
+            screenEcho: false, speaker: "You",
+            transcriptPath: dir.appendingPathComponent("out.txt").path,
+            screenURL: dir.appendingPathComponent("screen.txt"))
+        #expect(screen.isEmpty)             // nothing mirrored to the screen
+        #expect(file.contains("You: hello"))  // transcript still persisted
+    }
+}
+
 @Suite("Gain normalization")
 struct GainNormalizerTests {
     private let format = PCMFormat(sampleRate: 16000, bitsPerSample: 16, channels: 1)

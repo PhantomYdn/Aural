@@ -6,6 +6,9 @@
 
 > Unscheduled items. Add new work here; `/plan` will triage on next run.
 
+- [ ] Interactive: always render the live transcript on screen (stdout) **and** concurrently persist it when `-t FILE` is named (bug fix to match PRD §6.9 line 396, which already specifies this). Today `-t FILE` routes the transcript only to the file, leaving the interactive UI without captions. Add an injectable screen-echo to `LiveTranscriber` (plain text per finalised segment, with speaker label when set), enabled from the live paths when `interactive && transcript→file`. Covers the plain, source-attributed (`--speakers`), and single-diarized live paths. Tests inject a pipe and assert file-writer + screen both receive segments.
+- [ ] `examples/` adoptable zsh recipes wrapping `aural` (copy-and-adapt, not installed): `aural-meeting "name"` (interactive `--system --mix --speakers` → `<date>-name.{mp3,txt}`, then `fabric-ai -p summarize_meeting` → `.md`), `aural-note` (quick mic memo → audio + transcript), `aural-dictate` (mic → clipboard via `pbcopy`). `examples/README.md` indexes them with prerequisites (aural, fabric-ai, system-audio TCC → docs/permissions.md); add a pointer from README.md.
+
 ## Phase 1: Project Foundation & Core Capture (PRD M1)
 
 - [x] Initialize git repository with `.gitignore` for Swift/SwiftPM
