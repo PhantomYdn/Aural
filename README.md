@@ -40,12 +40,18 @@ stdout). It is built for Unix-style pipelines and unattended use.
 
 ```sh
 brew tap PhantomYdn/aural https://github.com/PhantomYdn/Aural
-brew install aural
+brew install phantomydn/aural/aural
 ```
 
 This installs the prebuilt arm64 binary and the man page, and pulls in
 `whisper-cpp` for the default engine. Homebrew downloads aren't quarantined, so
 no Gatekeeper steps are needed.
+
+> The formula is installed by its **tap-qualified name**
+> (`phantomydn/aural/aural`) because the bare name `aural` is already taken by an
+> unrelated Homebrew cask (the "Aural Player" app). Some Homebrew setups also
+> prompt you to trust a third-party tap — run `brew tap` as above (and
+> `brew trust phantomydn/aural` if asked).
 
 ### Build from source (Intel, or to hack on it)
 

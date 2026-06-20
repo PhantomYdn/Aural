@@ -64,7 +64,7 @@ jobs:
             echo
             echo '```sh'
             echo "brew tap PhantomYdn/aural https://github.com/PhantomYdn/Aural"
-            echo "brew install aural"
+            echo "brew install phantomydn/aural/aural"
             echo '```'
             echo
             echo "This beta binary is not yet notarized. A direct download must be"
