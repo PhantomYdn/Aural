@@ -64,7 +64,7 @@ jobs:
             echo
             echo '```sh'
             echo "brew tap PhantomYdn/hark https://github.com/PhantomYdn/hark"
-            echo "brew install phantomydn/hark/hark"
+            echo "brew install hark"
             echo '```'
             echo
             echo "This beta binary is not yet notarized. A direct download must be"

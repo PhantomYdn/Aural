@@ -40,18 +40,16 @@ stdout). It is built for Unix-style pipelines and unattended use.
 
 ```sh
 brew tap PhantomYdn/hark https://github.com/PhantomYdn/hark
-brew install phantomydn/hark/hark
+brew install hark
 ```
 
 This installs the prebuilt arm64 binary and the man page, and pulls in
 `whisper-cpp` for the default engine. Homebrew downloads aren't quarantined, so
 no Gatekeeper steps are needed.
 
-> The formula is installed by its **tap-qualified name**
-> (`phantomydn/hark/hark`) because the bare name `hark` is already taken by an
-> unrelated Homebrew cask (the "Hark Player" app). Some Homebrew setups also
-> prompt you to trust a third-party tap — run `brew tap` as above (and
-> `brew trust phantomydn/hark` if asked).
+> Some Homebrew setups prompt you to trust a third-party tap — run `brew tap` as
+> above (and `brew trust phantomydn/hark` if asked). The fully-qualified name
+> `phantomydn/hark/hark` also works.
 
 ### Build from source (Intel, or to hack on it)
 
