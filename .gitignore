@@ -5,6 +5,9 @@
 # Local test binary copied to the repo root (e.g. for manual runs)
 /hark
 
+# Scratch audio/transcripts from manual runs — never commit these
+/Tests/ManualTests/
+
 # Xcode
 *.xcodeproj/
 *.xcworkspace/

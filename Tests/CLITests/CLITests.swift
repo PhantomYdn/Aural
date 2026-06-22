@@ -1118,51 +1118,6 @@ struct GainNormalizerTests {
     }
 }
 
-/// Gated: replays the committed quiet recording through the real VAD at the
-/// (lowered) default threshold and asserts the previously-dropped quiet phrase
-/// now opens a segment. Runs only with HARK_TEST_VAD=1 on Apple Silicon.
-@Suite("VAD threshold recovery (integration)")
-struct VadThresholdRecoveryTests {
-    @Test func lowThresholdSegmentsQuietRegion() throws {
-        guard ProcessInfo.processInfo.environment["HARK_TEST_VAD"] == "1",
-            Platform.isAppleSilicon
-        else { return }
-        let mp3 = "Tests/ManualTests/test3.mp3"
-        guard FileManager.default.fileExists(atPath: mp3) else { return }
-
-        let wav = try AudioPipeline.normalizeFileForWhisper(mp3)  // 16 kHz mono 16-bit
-        defer { try? FileManager.default.removeItem(at: wav) }
-        let handle = try FileHandle(forReadingFrom: wav)
-        _ = try WAVStreamParser.parseHeader { handle.readData(ofLength: $0) }
-        let pcm = handle.readDataToEndOfFile()
-        try handle.close()
-
-        let format = PCMFormat(sampleRate: 16000, bitsPerSample: 16, channels: 1)
-        let byteRate = format.byteRate  // 32000
-        let start = min(pcm.count, 80 * byteRate)
-        let end = min(pcm.count, 94 * byteRate)
-        guard end > start else { return }
-        let slice = pcm.subdata(in: start..<end)  // the quiet dropped region
-
-        let classifier = try FluidVadClassifier.makeLoading(
-            pauseSeconds: 0.7, maxWindowSeconds: 12, threshold: 0.5)
-        let captured = Captured()
-        let segmenter = VadSegmenter(
-            format: format, classifier: classifier, resample: { samples, _ in samples },
-            maxWindowSeconds: 12, minSegmentSeconds: 0.4)
-        segmenter.onSegment = { data, s, e in captured.append((data.count, s, e)) }
-
-        var offset = 0
-        while offset < slice.count {
-            let n = min(8192, slice.count - offset)
-            segmenter.consume(slice.subdata(in: offset..<(offset + n)))
-            offset += n
-        }
-        segmenter.finish()
-        #expect(!captured.all().isEmpty)  // quiet phrase now opens a segment at threshold 0.5
-    }
-}
-
 @Suite("Speaker labels parsing")
 struct SpeakerLabelsParseTests {
     @Test func defaultsAndOverrides() {
