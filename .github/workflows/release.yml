@@ -82,20 +82,27 @@ jobs:
           # (fine for Homebrew + the online Gatekeeper check). Print the log and
           # fail the release if Apple rejects the submission.
           ditto -c -k "$BIN" hark-notarize.zip
-          SUBMIT_ID="$(xcrun notarytool submit hark-notarize.zip \
+          # Submit and wait (timeout-safe: a slow Apple queue must not crash the
+          # parse). Apple's first submission for a new account can be slow.
+          set +e
+          xcrun notarytool submit hark-notarize.zip \
             --key notary.p8 --key-id "$NOTARY_KEY_ID" --issuer "$NOTARY_ISSUER_ID" \
-            --wait --timeout 30m --output-format json | python3 -c 'import sys,json; print(json.load(sys.stdin)["id"])')"
-          STATUS="$(xcrun notarytool info "$SUBMIT_ID" \
-            --key notary.p8 --key-id "$NOTARY_KEY_ID" --issuer "$NOTARY_ISSUER_ID" \
-            --output-format json | python3 -c 'import sys,json; print(json.load(sys.stdin)["status"])')"
-          echo "notarization status: $STATUS"
+            --wait --timeout 45m --output-format json > notary.json
+          NOTARY_RC=$?
+          set -e
+          cat notary.json || true
+          SUBMIT_ID="$(python3 -c 'import json;print(json.load(open("notary.json")).get("id",""))' 2>/dev/null || true)"
+          STATUS="$(python3 -c 'import json;print(json.load(open("notary.json")).get("status",""))' 2>/dev/null || true)"
+          echo "notarytool rc=$NOTARY_RC status=$STATUS id=$SUBMIT_ID"
           if [ "$STATUS" != "Accepted" ]; then
-            echo "::error::notarization $STATUS — full log:"
-            xcrun notarytool log "$SUBMIT_ID" \
-              --key notary.p8 --key-id "$NOTARY_KEY_ID" --issuer "$NOTARY_ISSUER_ID" || true
+            echo "::error::notarization not accepted (status='$STATUS', rc=$NOTARY_RC)"
+            if [ -n "$SUBMIT_ID" ]; then
+              xcrun notarytool log "$SUBMIT_ID" \
+                --key notary.p8 --key-id "$NOTARY_KEY_ID" --issuer "$NOTARY_ISSUER_ID" || true
+            fi
             exit 1
           fi
-          rm -f cert.p12 notary.p8 hark-notarize.zip devid_intermediate.cer
+          rm -f cert.p12 notary.p8 hark-notarize.zip devid_intermediate.cer notary.json
 
       - name: Clean up signing keychain
         if: always()
