@@ -64,18 +64,14 @@ cp .build/release/hark /usr/local/bin/hark
 ### Direct binary download
 
 The arm64 binary is also attached to each
-[GitHub Release](https://github.com/PhantomYdn/hark/releases). This beta build
-is **not yet notarized**, so a direct download must be de-quarantined before it
-runs:
+[GitHub Release](https://github.com/PhantomYdn/hark/releases). It is **signed
+(Developer ID) and notarized**, so it passes Gatekeeper on download — no `xattr`
+workaround needed.
 
-```sh
-xattr -dr com.apple.quarantine ./hark
-```
-
-Because the binary is unsigned, macOS attributes its microphone / system-audio /
-speech permissions to the **terminal** that runs it — see
-[Permissions](#permissions). (Signed, notarized binaries are planned for a
-follow-up release; the Homebrew path above already works without these steps.)
+The stable signature also means privacy grants (microphone / system-audio /
+speech) persist across upgrades instead of resetting on each new binary. Note
+that for a CLI launched from a shell, macOS may still show the permission prompt
+under the **terminal** that runs `hark` — see [Permissions](#permissions).
 
 Install a transcription engine and model:
 
@@ -345,10 +341,11 @@ location.
 
 ## Permissions
 
-macOS gates microphone, system-audio, and speech recognition behind TCC. For an
-unsigned build these prompts are attributed to the **terminal** that launches
-`hark`. See [docs/permissions.md](docs/permissions.md) for the exact
-System Settings paths, the system-audio "+" flow, and notes for tmux/screen.
+macOS gates microphone, system-audio, and speech recognition behind TCC. The
+release binary is signed and notarized, so grants persist across upgrades; for a
+shell-launched CLI, macOS may still attribute these prompts to the **terminal**
+that launches `hark`. See [docs/permissions.md](docs/permissions.md) for the
+exact System Settings paths, the system-audio "+" flow, and notes for tmux/screen.
 
 System/app capture has two backends, selected by `--capture-backend` (default
 `auto`, or `$HARK_CAPTURE`):

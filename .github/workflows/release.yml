@@ -38,6 +38,69 @@ jobs:
           "$BIN" --version
           "$BIN" --version | grep -qx "${{ steps.version.outputs.version }}"
 
+      - name: Sign & notarize binary
+        env:
+          DEVID_CERT_P12_BASE64: ${{ secrets.DEVID_CERT_P12_BASE64 }}
+          DEVID_CERT_PASSWORD:   ${{ secrets.DEVID_CERT_PASSWORD }}
+          KEYCHAIN_PASSWORD:     ${{ secrets.KEYCHAIN_PASSWORD }}
+          NOTARY_KEY_P8_BASE64:  ${{ secrets.NOTARY_KEY_P8_BASE64 }}
+          NOTARY_KEY_ID:         ${{ secrets.NOTARY_KEY_ID }}
+          NOTARY_ISSUER_ID:      ${{ secrets.NOTARY_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          BIN=.build/release/hark
+
+          # Decode the Developer ID cert and the notary API key from secrets.
+          echo "$DEVID_CERT_P12_BASE64" | base64 --decode > cert.p12
+          echo "$NOTARY_KEY_P8_BASE64"  | base64 --decode > notary.p8
+
+          # Import the cert into a throwaway keychain that codesign can use
+          # non-interactively.
+          KEYCHAIN="$RUNNER_TEMP/build.keychain-db"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security import cert.p12 -k "$KEYCHAIN" -P "$DEVID_CERT_PASSWORD" -T /usr/bin/codesign
+          # Import the Apple "Developer ID Certification Authority" intermediate so
+          # the leaf chains to a trusted anchor (otherwise the identity is invalid).
+          curl -fsSL https://www.apple.com/certificateauthority/DeveloperIDG2CA.cer -o devid_intermediate.cer
+          security import devid_intermediate.cer -k "$KEYCHAIN" 2>/dev/null || true
+          security list-keychains -d user -s "$KEYCHAIN" login.keychain-db
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN" >/dev/null
+          IDENTITY="$(security find-identity -v -p codesigning "$KEYCHAIN" \
+            | awk '/Developer ID Application/ {print $2; exit}')"
+          test -n "$IDENTITY"
+
+          # Sign with the hardened runtime, entitlements, and a secure timestamp.
+          codesign --force --options runtime --timestamp \
+            --entitlements hark.entitlements -i dev.hark.cli -s "$IDENTITY" "$BIN"
+          codesign --verify --strict --verbose=2 "$BIN"
+          codesign -dvvv "$BIN" 2>&1 | grep -E 'Authority|TeamIdentifier'
+
+          # Notarize. A flat Mach-O can't be stapled, so the ticket lives online
+          # (fine for Homebrew + the online Gatekeeper check). Print the log and
+          # fail the release if Apple rejects the submission.
+          ditto -c -k "$BIN" hark-notarize.zip
+          SUBMIT_ID="$(xcrun notarytool submit hark-notarize.zip \
+            --key notary.p8 --key-id "$NOTARY_KEY_ID" --issuer "$NOTARY_ISSUER_ID" \
+            --wait --timeout 30m --output-format json | python3 -c 'import sys,json; print(json.load(sys.stdin)["id"])')"
+          STATUS="$(xcrun notarytool info "$SUBMIT_ID" \
+            --key notary.p8 --key-id "$NOTARY_KEY_ID" --issuer "$NOTARY_ISSUER_ID" \
+            --output-format json | python3 -c 'import sys,json; print(json.load(sys.stdin)["status"])')"
+          echo "notarization status: $STATUS"
+          if [ "$STATUS" != "Accepted" ]; then
+            echo "::error::notarization $STATUS — full log:"
+            xcrun notarytool log "$SUBMIT_ID" \
+              --key notary.p8 --key-id "$NOTARY_KEY_ID" --issuer "$NOTARY_ISSUER_ID" || true
+            exit 1
+          fi
+          rm -f cert.p12 notary.p8 hark-notarize.zip devid_intermediate.cer
+
+      - name: Clean up signing keychain
+        if: always()
+        run: security delete-keychain "$RUNNER_TEMP/build.keychain-db" 2>/dev/null || true
+
       - name: Package tarball
         id: package
         run: |
@@ -67,10 +130,8 @@ jobs:
             echo "brew install hark"
             echo '```'
             echo
-            echo "This beta binary is not yet notarized. A direct download must be"
-            echo "de-quarantined (\`xattr -dr com.apple.quarantine ./hark\`); Homebrew"
-            echo "installs do not need this. Requires macOS 14.4+ and, for the default"
-            echo "\`whisper\` engine, \`brew install whisper-cpp\`."
+            echo "The binary is signed (Developer ID) and notarized. Requires macOS"
+            echo "14.4+ and, for the default \`whisper\` engine, \`brew install whisper-cpp\`."
             echo
             echo "See [CHANGELOG.md](https://github.com/PhantomYdn/hark/blob/main/CHANGELOG.md) for details."
           } > release-notes.md

@@ -53,7 +53,7 @@ transcribes them, and composes into Unix pipelines.
 ### Notes
 - Requires macOS 14.4+. The prebuilt binary is Apple Silicon (arm64); Intel users
   build from source. The `whisper` engine needs an external whisper.cpp binary.
-- This beta binary is not yet notarized; install via Homebrew (no Gatekeeper
-  prompt) or remove the quarantine attribute on a direct download.
+- The release binary is signed (Developer ID) and notarized, so it passes
+  Gatekeeper; its stable code identity keeps privacy grants across upgrades.
 
 [0.1.0]: https://github.com/PhantomYdn/hark/releases/tag/v0.1.0

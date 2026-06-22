@@ -115,6 +115,7 @@ reattach after the restart.
   `NSMicrophoneUsageDescription`, `NSAudioCaptureUsageDescription`, and
   `NSSpeechRecognitionUsageDescription` plus a bundle identifier, which is
   required for any future direct attribution.
-- A signed and notarized release binary is planned in Phase 5; that work
-  should re-test whether direct attribution (prompting for `hark` itself)
-  becomes available.
+- The release binary is **signed (Developer ID) and notarized**, with a stable
+  code identity (`dev.hark.cli`, Team `8UW9J44QNB`), so TCC grants persist across
+  upgrades. Whether the prompt attributes to `hark` itself vs the launching
+  terminal still depends on macOS's responsible-process handling for shell CLIs.
