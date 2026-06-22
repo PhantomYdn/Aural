@@ -3,7 +3,7 @@ class Hark < Formula
   homepage "https://github.com/PhantomYdn/hark"
   url "https://github.com/PhantomYdn/hark/releases/download/v0.1.0/hark-0.1.0-macos-arm64.tar.gz"
   version "0.1.0"
-  sha256 "a43f1f0d0f87777e6602de84860fe71af5cf7031d9c4f65216ab7b394137a69f"
+  sha256 "f4fc1755f079966a2b6ab8fb5a9958c50cb04013437061d73d54c4314c7532d3"
   license "MIT"
 
   # Prebuilt Apple Silicon binary; Intel users build from source (see README).
