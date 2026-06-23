@@ -9,6 +9,7 @@
 - [ ] Interactive: always render the live transcript on screen (stdout) **and** concurrently persist it when `-t FILE` is named (bug fix to match PRD §6.9 line 396, which already specifies this). Today `-t FILE` routes the transcript only to the file, leaving the interactive UI without captions. Add an injectable screen-echo to `LiveTranscriber` (plain text per finalised segment, with speaker label when set), enabled from the live paths when `interactive && transcript→file`. Covers the plain, source-attributed (`--speakers`), and single-diarized live paths. Tests inject a pipe and assert file-writer + screen both receive segments.
 - [ ] `examples/` adoptable zsh recipes wrapping `hark` (copy-and-adapt, not installed): `hark-meeting "name"` (interactive `--system --mix --speakers` → `<date>-name.{mp3,txt}`, then `fabric-ai -p summarize_meeting` → `.md`), `hark-note` (quick mic memo → audio + transcript), `hark-dictate` (mic → clipboard via `pbcopy`). `examples/README.md` indexes them with prerequisites (hark, fabric-ai, system-audio TCC → docs/permissions.md); add a pointer from README.md.
 - [ ] Downloading require time. If hark has been started for listening: but it needs to download something - it should be clearly stated for user - otherwise delay might flustrate users
+- [ ] Dedicated `PhantomYdn/homebrew-hark` tap repo (formula-only) so `brew tap` doesn't clone the whole project tree (a tap is a full `git clone`); needs a cross-repo push token for the release workflow's formula auto-bump (the default `GITHUB_TOKEN` can't push to another repo).
 
 ## Phase 1: Project Foundation & Core Capture (PRD M1)
 
@@ -167,13 +168,13 @@
 - [x] Release automation: tag-triggered `.github/workflows/release.yml` builds `swift build -c release`, packages the arm64 binary + man/LICENSE/NOTICES, publishes a GitHub Release, and auto-bumps `Formula/hark.rb` (url+sha256)
 - [x] Homebrew (one-repo tap): `Formula/hark.rb` binary formula (`depends_on whisper-cpp`, arm64); `brew tap PhantomYdn/hark <url> && brew install hark`. Bare `brew install hark` (homebrew-core) deferred — needs notability + a stable release
 - [x] Fill PRD Author field (Ilya Naryzhnyy); acceptance criteria US01–US07 reviewed against the implementation (capture/transcode/engines/diarization/interactive/remote-control all shipped; live-capture e2e steps remain TCC/GUI-gated on the pending-live list)
+- [x] Code signing + notarization: tag-triggered Developer ID signing (hardened runtime + `hark.entitlements` audio-input/speech-recognition, identifier `dev.hark.cli`, Team `8UW9J44QNB`) and `notarytool` notarization in `release.yml` — secrets-driven, imports the cert + Apple intermediate into a throwaway keychain, fails the release on any non-`Accepted` status (45m timeout, timeout-safe). The published v0.1.0 binary is signed + notarized; README/permissions/CHANGELOG updated (dropped the `xattr` note)
 
 ### Post-beta (deferred from v0.1.0)
 
-> Need an Apple Developer account, a hardware soak/measure session, or GUI/TCC
-> that CI can't provide. Tracked here so the beta isn't blocked on them.
+> Need a hardware soak/measure session or GUI/TCC that CI can't provide.
+> Tracked here so the beta isn't blocked on them.
 
-- [ ] Code signing and notarization so direct-download (non-Homebrew) TCC flows work cleanly without `xattr` (PRD §7 Installability) — needs a Developer ID + notary key as CI secrets
 - [ ] Submit to homebrew-core for bare `brew install hark` (after notability + a stable, non-beta release)
 - [ ] Validate unattended operation from cron/launchd after TCC grant (US05)
 - [ ] Reliability test: 24-hour continuous recording produces valid file on SIGINT/SIGTERM (PRD §7)
