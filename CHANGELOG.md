@@ -4,6 +4,21 @@ All notable changes to Hark are documented here. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+- Live transcription no longer drops whole turns. The segmenter only transcribed
+  Silero-VAD-detected speech and discarded everything else, so quiet or
+  overlapping speech (e.g. remote participants picked up over a room mic) was
+  lost — on a real 57-minute meeting ~a third of the words the same recognizer
+  captures from the whole file were missing. The segmenter now covers the entire
+  timeline (the VAD only chooses clean cut points; a max-window cut covers
+  speech it misses), skipping only true silence. Measured coverage on that
+  meeting rose from ~65% to ~80% of the whole-file baseline.
+- A single segment that fails to transcribe no longer aborts the rest of the
+  transcript; the failure is logged and that segment skipped (only a closed
+  output pipe stops capture).
+
 ## [0.2.0] - 2026-06-23
 
 ### Added

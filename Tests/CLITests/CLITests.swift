@@ -733,12 +733,17 @@ struct VadSegmenterTests {
         #expect(abs(result[0].2 - 0.25) < 1e-6)
     }
 
-    @Test func shortBlipBelowMinSegmentDropped() {
+    @Test func shortBlipCapturedAtDrainNotDropped() {
+        // Cover-all: a sub-minSegment blip isn't cut as its own VAD turn, but the
+        // trailing flush still captures the audio rather than silently dropping
+        // it (the gating bug that lost whole turns).
         let (seg, captured) = makeSegmenter(minSegment: 0.3)
         seg.consume(loud(0.1))   // one 0.1 s speech window
-        seg.consume(quiet(0.2))  // silence closes the turn
+        seg.consume(quiet(0.2))  // silence — too short to cut, but not dropped
         seg.finish()
-        #expect(captured.all().isEmpty)  // 0.1 s < 0.3 s min -> dropped
+        let result = captured.all()
+        #expect(result.count == 1)     // the blip is transcribed, not dropped
+        #expect(result[0].0 > 0)        // non-empty audio
     }
 
     // Regression for the segment-drift bug: when the capture rate differs from

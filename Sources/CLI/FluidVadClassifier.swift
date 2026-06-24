@@ -113,7 +113,8 @@ enum SpeechSegmenterFactory {
             }
             return VadSegmenter(
                 format: format, classifier: classifier, resampler: resampler,
-                maxWindowSeconds: maxWindowSeconds, minSegmentSeconds: minSegmentSeconds)
+                maxWindowSeconds: maxWindowSeconds, minSegmentSeconds: minSegmentSeconds,
+                silenceThresholdDBFS: silenceThresholdDBFS)
         }
         Log.verbose("live segmentation: amplitude threshold (\(silenceThresholdDBFS) dBFS)")
         return StreamSegmenter(

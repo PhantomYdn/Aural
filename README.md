@@ -139,12 +139,13 @@ and `-` are unaffected). Defaults to the current directory; also
 [Models](#models)), `--language` (`auto`, or a code; support varies by engine),
 `--translate` / `--no-translate`, `--transcript-format txt|srt|json`.
 
-**Quiet captures**: live transcription segments speech with an on-device VAD
-(Apple Silicon). If phrases are dropped because the input is quiet (low mic/
-system gain), lower the gate with `--vad-threshold` (0–1, default `0.5`; lower =
-catches quieter speech). Segments are also peak-normalized before the engine to
-improve recognition of low-level audio (the recording is unaffected; disable
-with `HARK_GAIN=off`).
+**Quiet captures**: live transcription covers the whole timeline — an on-device
+VAD (Apple Silicon) only picks clean cut points, and speech the VAD doesn't flag
+(quiet or overlapping, e.g. remote participants over a room mic) is still
+transcribed rather than dropped; only true silence is skipped. `--vad-threshold`
+(0–1, default `0.5`) tunes where turns are cut. Segments are also peak-normalized
+before the engine to improve recognition of low-level audio (the recording is
+unaffected; disable with `HARK_GAIN=off`).
 
 Run `hark --help` for the full list, and `hark help <subcommand>` for a
 subcommand's options.

@@ -168,23 +168,35 @@ final class LiveTranscriber: AudioSink, @unchecked Sendable {
     private func enqueue(_ segment: Data, format segFormat: PCMFormat, start: Double, end: Double) {
         worker.async { [weak self] in
             guard let self, self.failure.take() == nil else { return }
+            let text: String
+            let speaker: String?
             do {
-                let (text, speaker) = try self.transcribeSegment(
+                (text, speaker) = try self.transcribeSegment(
                     segment, format: segFormat, start: start, end: end)
-                let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-                if !trimmed.isEmpty && !Self.isNonSpeech(trimmed) {
-                    try self.writer.append(text: trimmed, start: start, end: end, speaker: speaker)
-                    // Interactive captions: when the transcript is persisted to a
-                    // file the writer never reaches the UI, so mirror the plain
-                    // text (with the speaker label when set) to the screen so the
-                    // live transcript still appears on-screen (PRD §6.9).
-                    if self.screenEcho {
-                        let line = (speaker.map { "\($0): " } ?? "") + trimmed + "\n"
-                        try? self.screen.write(contentsOf: Data(line.utf8))
-                    }
-                }
             } catch {
+                // A single segment failing to transcribe (a transient engine
+                // hiccup) must not abandon the rest of the recording — log it and
+                // skip just this segment, then keep going.
+                Log.verbose("transcription failed for segment [\(start)–\(end)s], skipping: \(error)")
+                return
+            }
+            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty, !Self.isNonSpeech(trimmed) else { return }
+            do {
+                try self.writer.append(text: trimmed, start: start, end: end, speaker: speaker)
+            } catch {
+                // An output write failure (e.g. the transcript pipe closed) is
+                // terminal — record it so capture stops cleanly.
                 _ = self.failure.store(error)
+                return
+            }
+            // Interactive captions: when the transcript is persisted to a file
+            // the writer never reaches the UI, so mirror the plain text (with the
+            // speaker label when set) to the screen so the live transcript still
+            // appears on-screen (PRD §6.9).
+            if self.screenEcho {
+                let line = (speaker.map { "\($0): " } ?? "") + trimmed + "\n"
+                try? self.screen.write(contentsOf: Data(line.utf8))
             }
         }
     }

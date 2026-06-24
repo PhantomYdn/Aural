@@ -46,10 +46,13 @@ protocol VoiceActivityStream: AnyObject, Sendable {
 /// whole turns on long recordings). Segments are emitted as 16 kHz mono 16-bit
 /// PCM — already in whisper's native format, so no second resample is needed.
 ///
-/// A speech turn (`speechStart` → `speechEnd`) becomes a segment; a long
-/// monologue is force-cut at `maxWindowSeconds`; sub-`minSegmentSeconds` turns
-/// are dropped. While idle, the slab is trimmed to a short guard window so a
-/// back-dated `speechStart` (VAD padding) still has its leading audio.
+/// The timeline is covered end to end (no audio is gated out): the VAD's
+/// `speechStart`/`speechEnd` only choose clean cut points, and any stretch the
+/// VAD misses (quiet or overlapping speech) is still emitted, force-cut at
+/// `maxWindowSeconds`. Only spans whose peak stays below the silence floor (pure
+/// dead air) are skipped. This is the fix for VAD *gating* dropping whole turns:
+/// transcribing only VAD-detected speech lost ~a third of a real meeting versus
+/// transcribing the whole timeline with the same recognizer.
 final class VadSegmenter: SpeechSegmenter, @unchecked Sendable {
     var onSegment: ((Data, PCMFormat, Double, Double) -> Void)?
 
@@ -63,9 +66,9 @@ final class VadSegmenter: SpeechSegmenter, @unchecked Sendable {
     private let windowSamples: Int
     private let maxWindowSamples: Int
     private let minSegmentSamples: Int
-    /// Audio kept ahead of the live point while idle, so a back-dated
-    /// `speechStart` (VAD padding) still has its leading audio available.
-    private let guardSamples = 2 * 16000
+    /// Spans whose peak amplitude stays below this are pure silence and are
+    /// skipped (not transcribed); everything above it is emitted.
+    private let silenceFloor: Float
 
     private let continuation: AsyncStream<Data>.Continuation
     private let done = DispatchSemaphore(value: 0)
@@ -78,15 +81,15 @@ final class VadSegmenter: SpeechSegmenter, @unchecked Sendable {
     private var slab = [Float]()  // retained 16 kHz samples
     private var slabBase = 0  // absolute 16 kHz index of slab[0]
     private var windowOffset = 0  // index within slab of the next sample to feed the VAD
-    private var triggered = false
-    private var segmentStart = 0  // absolute 16 kHz index of the open turn
+    private var lastCut = 0  // absolute 16 kHz index where the pending segment starts
 
     init(
         format: PCMFormat,
         classifier: VoiceActivityStream,
         resampler: StreamResampler,
         maxWindowSeconds: Double,
-        minSegmentSeconds: Double
+        minSegmentSeconds: Double,
+        silenceThresholdDBFS: Double = -50
     ) {
         self.captureFormat = format
         self.classifier = classifier
@@ -94,6 +97,7 @@ final class VadSegmenter: SpeechSegmenter, @unchecked Sendable {
         self.windowSamples = max(1, classifier.windowSamples)
         self.maxWindowSamples = max(1, Int(maxWindowSeconds * Double(Self.outputRate)))
         self.minSegmentSamples = max(0, Int(minSegmentSeconds * Double(Self.outputRate)))
+        self.silenceFloor = Float(pow(10.0, silenceThresholdDBFS / 20.0))
 
         let (stream, continuation) = AsyncStream<Data>.makeStream(
             of: Data.self, bufferingPolicy: .unbounded)
@@ -138,35 +142,23 @@ final class VadSegmenter: SpeechSegmenter, @unchecked Sendable {
 
     private func processWindow(_ window: [Float]) async {
         let event = try? await classifier.process(window)
+        let now = slabBase + windowOffset
         switch event {
         case .speechStart(let sample):
-            if !triggered {
-                triggered = true
-                // Can't predate audio we still hold (idle trim may have dropped
-                // earlier samples); clamp to the slab base.
-                segmentStart = max(slabBase, sample)
-                dropSlab(before: segmentStart)
-            }
+            // Close out the preceding (typically silent) span so the speech
+            // segment starts clean; a silent flush is skipped inside `emit`.
+            let cut = min(now, max(lastCut, sample))
+            if cut > lastCut { emitSpan(from: lastCut, to: cut) }
         case .speechEnd(let sample):
-            if triggered {
-                emit(start: segmentStart, end: max(segmentStart, sample))
-                triggered = false
-            }
+            // End of a detected turn: emit it as its own segment.
+            let cut = min(now, max(lastCut, sample))
+            if cut - lastCut >= minSegmentSamples { emitSpan(from: lastCut, to: cut) }
         case .none:
             break
         }
-
-        let now = slabBase + windowOffset
-        if triggered {
-            // Long monologue with no pause: force a cut at the window cap.
-            if now - segmentStart >= maxWindowSamples {
-                emit(start: segmentStart, end: now)
-                segmentStart = now
-            }
-        } else {
-            // Idle: bound memory but keep a guard window for back-dated starts.
-            dropSlab(before: now - guardSamples)
-        }
+        // Cover audio the VAD never flagged (quiet/overlapping speech) and cap
+        // long turns: force a cut once the pending span reaches the window.
+        if now - lastCut >= maxWindowSamples { emitSpan(from: lastCut, to: now) }
     }
 
     private func drain() async {
@@ -180,10 +172,8 @@ final class VadSegmenter: SpeechSegmenter, @unchecked Sendable {
             windowOffset = slab.count
             await processWindow(window)
         }
-        if triggered {
-            emit(start: segmentStart, end: slabBase + windowOffset)
-            triggered = false
-        }
+        let now = slabBase + windowOffset
+        if now > lastCut { emitSpan(from: lastCut, to: now) }
         slab.removeAll()
     }
 
@@ -199,25 +189,33 @@ final class VadSegmenter: SpeechSegmenter, @unchecked Sendable {
         windowOffset -= drop
     }
 
-    /// Emits the segment spanning the absolute 16 kHz range `[start, end)`,
-    /// sliced directly from the slab. Turns shorter than `minSegmentSeconds`
-    /// are dropped. Advances the slab past the emitted audio.
-    private func emit(start: Int, end: Int) {
-        guard end - start >= minSegmentSamples else {
-            dropSlab(before: end)
-            return
-        }
+    /// Emits the span `[start, end)` (absolute 16 kHz indices), sliced directly
+    /// from the slab, unless it is pure silence (peak below the floor), in which
+    /// case it is skipped. Always advances `lastCut` and the slab past `end`.
+    private func emitSpan(from start: Int, to end: Int) {
         let lo = max(0, start - slabBase)
         let hi = min(slab.count, end - slabBase)
-        guard hi > lo else {
+        defer {
+            lastCut = max(lastCut, end)
             dropSlab(before: end)
-            return
         }
-        let pcm = VadSegmenter.packInt16(slab[lo..<hi])
+        guard hi > lo else { return }
+        let slice = slab[lo..<hi]
+        guard VadSegmenter.peak(slice) >= silenceFloor else { return }  // dead air: skip
+        let pcm = VadSegmenter.packInt16(slice)
         let startSeconds = Double(slabBase + lo) / Double(Self.outputRate)
         let endSeconds = Double(slabBase + hi) / Double(Self.outputRate)
         onSegment?(pcm, Self.segmentFormat, startSeconds, endSeconds)
-        dropSlab(before: slabBase + hi)
+    }
+
+    /// Peak absolute amplitude of a 16 kHz float slice.
+    private static func peak(_ samples: ArraySlice<Float>) -> Float {
+        var m: Float = 0
+        for v in samples {
+            let a = abs(v)
+            if a > m { m = a }
+        }
+        return m
     }
 
     // MARK: PCM packing/unpacking
