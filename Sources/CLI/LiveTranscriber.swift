@@ -8,9 +8,11 @@ import Foundation
 /// appended to the transcript destination — keeping output as close to
 /// runtime as possible without a streaming engine (PRD §6.6).
 ///
-/// Whisper is invoked once per segment (per-segment model reload); a
-/// persistent-process optimization is tracked as a follow-up. Timestamps are
-/// sample-accurate, derived from the capture byte clock.
+/// The engine is invoked once per segment; the whisper live backend prefers a
+/// resident `whisper-server` so the model is loaded once (per-segment work is
+/// just a request). Each segment carries its own PCM format and timestamps:
+/// the VAD path emits 16 kHz mono sliced from a single sample clock, the
+/// amplitude path emits the capture format from its byte clock.
 final class LiveTranscriber: AudioSink, @unchecked Sendable {
     private let transcriber: TranscriptionBackend
     private let language: String?
@@ -84,9 +86,10 @@ final class LiveTranscriber: AudioSink, @unchecked Sendable {
         self.label = labelName
 
         // The segmenter calls back synchronously on the capture I/O queue;
-        // hand each finished segment to the serial transcription worker.
-        segmenter.onSegment = { [weak self] segment, start, end in
-            self?.enqueue(segment, start: start, end: end)
+        // hand each finished segment (with its own PCM format) to the serial
+        // transcription worker.
+        segmenter.onSegment = { [weak self] segment, segFormat, start, end in
+            self?.enqueue(segment, format: segFormat, start: start, end: end)
         }
         Log.verbose("""
             live transcription: \(transcriber.label)\(speaker.map { " [\($0)]" } ?? ""); \
@@ -159,9 +162,10 @@ final class LiveTranscriber: AudioSink, @unchecked Sendable {
         segmenter.consume(data)
     }
 
-    /// Queues a finished segment for in-order transcription and emission.
-    private func enqueue(_ segment: Data, start: Double, end: Double) {
-        let segFormat = format
+    /// Queues a finished segment for in-order transcription and emission. The
+    /// segment carries its own PCM format (VAD emits 16 kHz mono; the amplitude
+    /// segmenter passes the capture format through).
+    private func enqueue(_ segment: Data, format segFormat: PCMFormat, start: Double, end: Double) {
         worker.async { [weak self] in
             guard let self, self.failure.take() == nil else { return }
             do {
@@ -185,10 +189,9 @@ final class LiveTranscriber: AudioSink, @unchecked Sendable {
         }
     }
 
-    /// Stages one segment as a temporary WAV, normalizes it to whisper's
-    /// 16 kHz mono format, and returns the recognized text plus its speaker
-    /// label (from the optional acoustic resolver over `[start, end]`, else the
-    /// fixed label).
+    /// Stages one segment as a temporary WAV in whisper's 16 kHz mono format and
+    /// returns the recognized text plus its speaker label (from the optional
+    /// acoustic resolver over `[start, end]`, else the fixed label).
     private func transcribeSegment(
         _ pcm: Data, format: PCMFormat, start: Double, end: Double
     ) throws -> (text: String, speaker: String?) {
@@ -203,10 +206,20 @@ final class LiveTranscriber: AudioSink, @unchecked Sendable {
         try writer.write(boosted)
         try writer.finalize()
 
-        let normalized = try AudioPipeline.normalizeFileForWhisper(raw.path)
-        defer { try? FileManager.default.removeItem(at: normalized) }
+        // VAD segments are already 16 kHz mono 16-bit — whisper's native format —
+        // so feed them directly; other formats are normalized (resampled) first.
+        let wav: URL
+        let normalizedTemp: Bool
+        if format == AudioPipeline.whisperFormat {
+            wav = raw
+            normalizedTemp = false
+        } else {
+            wav = try AudioPipeline.normalizeFileForWhisper(raw.path)
+            normalizedTemp = true
+        }
+        defer { if normalizedTemp { try? FileManager.default.removeItem(at: wav) } }
         let text = try transcriber.transcribe(
-            wavFile: normalized, language: language, translate: translate, format: .txt)
+            wavFile: wav, language: language, translate: translate, format: .txt)
         let speaker = resolver?.label(start: start, end: end) ?? self.speaker
         return (text, speaker)
     }
@@ -261,8 +274,9 @@ final class StreamSegmenter: SpeechSegmenter {
     private var silenceRunBytes = 0
     private var emittedBytes: UInt64 = 0
 
-    /// Called with each finished segment: (PCM, startSeconds, endSeconds).
-    var onSegment: ((Data, Double, Double) -> Void)?
+    /// Called with each finished segment: (PCM, format, startSeconds, endSeconds).
+    /// The amplitude segmenter emits audio in the capture format unchanged.
+    var onSegment: ((Data, PCMFormat, Double, Double) -> Void)?
 
     init(
         format: PCMFormat,
@@ -323,7 +337,7 @@ final class StreamSegmenter: SpeechSegmenter {
         let end = Double(emittedBytes) / Double(format.byteRate)
         hadSpeech = false
         silenceRunBytes = 0
-        onSegment?(segment, start, end)
+        onSegment?(segment, format, start, end)
     }
 }
 

@@ -60,6 +60,15 @@ public protocol CaptureSession: AnyObject, Sendable {
     func start(onAudio: @escaping @Sendable (Data) -> Void) throws
     /// Stops capture and releases audio resources.
     func stop()
+    /// Attempts to re-establish capture after the OS interrupted it (screen
+    /// lock, display/system sleep, device/route change), continuing to deliver
+    /// to the original `onAudio`. Returns true once capture is running again.
+    /// The default returns false (no recovery — the caller then stops cleanly).
+    func restart() -> Bool
+}
+
+extension CaptureSession {
+    public func restart() -> Bool { false }
 }
 
 /// One side of a mixed capture, for source attribution ("You" vs "Others").
@@ -88,6 +97,12 @@ public final class MicCaptureSession: CaptureSession, @unchecked Sendable {
     private let outputFormat: PCMFormat
     private var converter: PCMStreamConverter?
     private var started = false
+    // Stored so the tap can be reinstalled after an interruption (sleep/route
+    // change) without the caller's involvement.
+    private var onAudio: (@Sendable (Data) -> Void)?
+    private let reconfigureQueue = DispatchQueue(label: "hark.mic.reconfigure")
+    private var configObserver: NSObjectProtocol?
+    private var reconfiguring = false
 
     /// - Parameters:
     ///   - deviceID: HAL device to capture from; `nil` uses the default input.
@@ -141,26 +156,44 @@ public final class MicCaptureSession: CaptureSession, @unchecked Sendable {
     public func start(onAudio: @escaping @Sendable (Data) -> Void) throws {
         precondition(!started, "session already started")
         started = true
+        self.onAudio = onAudio
+        try installAndStart()
 
-        let inputNode = engine.inputNode
-        if let deviceID {
-            var id = deviceID
-            guard let audioUnit = inputNode.audioUnit else {
-                throw TapEngineError.deviceSelectionFailed(-1)
-            }
-            let status = AudioUnitSetProperty(
-                audioUnit,
-                kAudioOutputUnitProperty_CurrentDevice,
-                kAudioUnitScope_Global,
-                0,
-                &id,
-                UInt32(MemoryLayout<AudioDeviceID>.size)
-            )
-            guard status == noErr else {
-                throw TapEngineError.deviceSelectionFailed(status)
+        // AVAudioEngine stops its input tap on device/route changes and on
+        // sleep/wake; it posts this notification when that happens. Reinstall
+        // the tap and restart the engine so capture survives a screen lock or
+        // display/system sleep without the caller doing anything.
+        configObserver = NotificationCenter.default.addObserver(
+            forName: .AVAudioEngineConfigurationChange, object: engine, queue: nil
+        ) { [weak self] _ in
+            self?.reconfigureQueue.async {
+                guard let self, self.started, !self.reconfiguring else { return }
+                _ = self.reinstall()
             }
         }
+    }
 
+    /// Points the engine's input at the selected device (no-op for default).
+    private func selectDeviceIfNeeded() throws {
+        guard let deviceID else { return }
+        var id = deviceID
+        guard let audioUnit = engine.inputNode.audioUnit else {
+            throw TapEngineError.deviceSelectionFailed(-1)
+        }
+        let status = AudioUnitSetProperty(
+            audioUnit, kAudioOutputUnitProperty_CurrentDevice, kAudioUnitScope_Global, 0,
+            &id, UInt32(MemoryLayout<AudioDeviceID>.size))
+        guard status == noErr else { throw TapEngineError.deviceSelectionFailed(status) }
+    }
+
+    /// Builds the converter for the current hardware format, installs the tap,
+    /// and starts the engine. Used by `start` and by recovery.
+    private func installAndStart() throws {
+        let inputNode = engine.inputNode
+        try selectDeviceIfNeeded()
+        // Re-read the hardware format every time — it can change across a route
+        // change (e.g. internal mic → Bluetooth). The output format is constant,
+        // so downstream sinks/segmenter are unaffected.
         let hardwareFormat = inputNode.inputFormat(forBus: 0)
         let converter = try PCMStreamConverter(
             inputFormat: hardwareFormat, outputFormat: outputFormat)
@@ -168,7 +201,7 @@ public final class MicCaptureSession: CaptureSession, @unchecked Sendable {
 
         inputNode.installTap(onBus: 0, bufferSize: 4096, format: hardwareFormat) {
             [weak self] buffer, _ in
-            guard let self, let converter = self.converter else { return }
+            guard let self, let converter = self.converter, let onAudio = self.onAudio else { return }
             if let data = converter.convert(buffer) {
                 onAudio(data)
             }
@@ -183,9 +216,38 @@ public final class MicCaptureSession: CaptureSession, @unchecked Sendable {
         }
     }
 
+    /// Tears down and re-establishes the tap/engine. Serialized on
+    /// `reconfigureQueue`; returns whether the engine is running again.
+    @discardableResult
+    private func reinstall() -> Bool {
+        guard started else { return false }
+        reconfiguring = true
+        defer { reconfiguring = false }
+        engine.inputNode.removeTap(onBus: 0)
+        if engine.isRunning { engine.stop() }
+        do {
+            try installAndStart()
+            return engine.isRunning
+        } catch {
+            return false
+        }
+    }
+
+    /// Re-establishes capture after an external interruption (driven by the
+    /// stall watchdog). Returns true once the engine is running again.
+    public func restart() -> Bool {
+        guard started else { return false }
+        return reconfigureQueue.sync { reinstall() }
+    }
+
     /// Stops capture and tears down the tap.
     public func stop() {
         guard started else { return }
+        started = false
+        if let configObserver {
+            NotificationCenter.default.removeObserver(configObserver)
+            self.configObserver = nil
+        }
         engine.inputNode.removeTap(onBus: 0)
         engine.stop()
     }

@@ -29,6 +29,8 @@ public final class SystemCaptureSession: MultiTrackCaptureSession, @unchecked Se
     /// When set before `start` (and a mic is mixed in), each source is also
     /// delivered separately for attribution (PRD §6.7a).
     public var onSourceAudio: (@Sendable (CaptureSource, Data) -> Void)?
+    /// Stored so the tap/aggregate/IOProc can be rebuilt after an interruption.
+    private var onAudio: (@Sendable (Data) -> Void)?
     private let ioQueue = DispatchQueue(label: "hark.tap.io")
     private var started = false
     private var processListListener: AudioObjectPropertyListenerBlock?
@@ -57,7 +59,13 @@ public final class SystemCaptureSession: MultiTrackCaptureSession, @unchecked Se
     public func start(onAudio: @escaping @Sendable (Data) -> Void) throws {
         precondition(!started, "session already started")
         started = true
+        self.onAudio = onAudio
+        try configure()
+    }
 
+    /// Builds the tap, private aggregate device, and IOProc, and starts IO.
+    /// Reused by `start` and by `restart` (after an interruption).
+    private func configure() throws {
         // 1. Create the tap. A TCC denial surfaces here or at IO start.
         let tap = try ProcessTap(scope: scope)
         self.tap = tap
@@ -191,7 +199,7 @@ public final class SystemCaptureSession: MultiTrackCaptureSession, @unchecked Se
             }
             guard let buffer, buffer.frameLength > 0 else { return }
             if let data = converter.convert(buffer) {
-                onAudio(data)
+                self.onAudio?(data)
             }
 
             // Source attribution: deliver tap-only and mic-only streams too.
@@ -269,7 +277,22 @@ public final class SystemCaptureSession: MultiTrackCaptureSession, @unchecked Se
 
     public func stop() {
         guard started else { return }
+        started = false
         teardown()
+    }
+
+    /// Rebuilds the tap/aggregate/IOProc after an interruption (driven by the
+    /// stall watchdog) and resumes delivering to the original `onAudio`.
+    /// Returns true if capture restarted.
+    public func restart() -> Bool {
+        guard started else { return false }
+        teardown()
+        do {
+            try configure()
+            return true
+        } catch {
+            return false
+        }
     }
 
     private func teardown() {

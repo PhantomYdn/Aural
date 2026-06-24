@@ -4,6 +4,32 @@ All notable changes to Hark are documented here. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow
 [Semantic Versioning](https://semver.org/).
 
+## [0.2.0] - 2026-06-23
+
+### Added
+- Capture now **auto-recovers from interruptions** (screen lock, display/system
+  sleep, device/route change). A stall watchdog notices when the stream stops
+  delivering audio and restarts the microphone, system-tap, or ScreenCaptureKit
+  session, resuming automatically — previously a lock/sleep killed capture and
+  the transcript silently stopped. Tunable via `$HARK_STALL_SECONDS` and
+  `$HARK_RECOVER_TIMEOUT` (a bounded clean-stop fallback, off by default), or
+  disable with `$HARK_NO_RECOVER`.
+- `--keep-awake` / `--no-keep-awake` (also `$HARK_KEEP_AWAKE` and
+  `hark config set keep-awake`): keep the machine awake while recording so idle
+  sleep can't interrupt a long capture. Off by default; in `--interactive` it
+  also keeps the display on.
+
+### Fixed
+- Live transcription no longer drops words or whole phrases on longer
+  recordings. The VAD segmenter resampled each captured chunk independently
+  (a fresh converter per chunk), so the 16 kHz clock that drives segment
+  boundaries drifted from the captured audio and the error accumulated over
+  time — progressively misaligning, clipping, and eventually dropping late
+  turns. The segmenter now resamples the stream through one continuous resampler
+  and slices each turn directly from that 16 kHz buffer by sample index (a
+  single clock), and feeds whisper the already-16 kHz audio without a second
+  resample.
+
 ## [0.1.0] - 2026-06-20
 
 First public beta. A native macOS CLI (single Swift binary) that captures
@@ -56,4 +82,5 @@ transcribes them, and composes into Unix pipelines.
 - The release binary is signed (Developer ID) and notarized, so it passes
   Gatekeeper; its stable code identity keeps privacy grants across upgrades.
 
+[0.2.0]: https://github.com/PhantomYdn/hark/releases/tag/v0.2.0
 [0.1.0]: https://github.com/PhantomYdn/hark/releases/tag/v0.1.0

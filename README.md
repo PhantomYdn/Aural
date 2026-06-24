@@ -121,7 +121,14 @@ output transcribes to stdout.
 
 **Capture / timing**: `-r/--rate`, `-b/--bits` (16/24/32), `-c/--channels`
 (1/2), `--duration SEC`, `--split duration=SEC` / `--split silence=SEC`
-(with `--silence-threshold dBFS`).
+(with `--silence-threshold dBFS`), `--keep-awake` to stop the system sleeping
+mid-recording (also the display in `--interactive`; off by default, or
+`$HARK_KEEP_AWAKE` / config `keep-awake`).
+
+**Interruptions**: capture auto-recovers from a screen lock, display/system
+sleep, or device change — the stream is restarted and recording resumes
+(tunable via `$HARK_STALL_SECONDS`, `$HARK_RECOVER_TIMEOUT`; disable with
+`$HARK_NO_RECOVER`). Pair with `--keep-awake` to avoid idle sleep entirely.
 
 **Working directory**: `-C, --directory PATH` resolves **relative** artifact
 paths (`-i`, `-a`, `-t`, and `--split` outputs) against `PATH` (absolute paths
@@ -313,6 +320,7 @@ and `capture-backend` (`$HARK_CAPTURE`).
 | `directory` | `-C/--directory` | current directory |
 | `capture-backend` | `--capture-backend` | `auto` |
 | `rate` / `bits` / `channels` | `-r` / `-b` / `-c` | live `44100`/`16`; convert = source |
+| `keep-awake` | `--keep-awake`/`--no-keep-awake` | `false` |
 | `silence-threshold` | `--silence-threshold` | `-50` |
 | `vad` | `--vad`/`--no-vad` | `true` |
 | `vad-threshold` | `--vad-threshold` | `0.5` |

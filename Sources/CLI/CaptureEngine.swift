@@ -23,6 +23,10 @@ struct CaptureEngine {
     let mix: Bool
     /// System/app capture backend: "auto", "sckit", or "coreaudio".
     var captureBackend: String = "auto"
+    /// Keep the machine awake for the capture's duration (`--keep-awake`).
+    var sleepMode: SleepPreventionMode = .off
+    /// Stall-recovery tuning (resolved from the environment; overridable in tests).
+    var recovery: RecoverySettings = .fromEnvironment()
     /// Optional external control (interactive keys / remote agent): pause drops
     /// captured chunks (a true gap); stop ends capture like a signal. nil for
     /// the plain one-shot CLI path.
@@ -104,6 +108,13 @@ struct CaptureEngine {
         // error (EPIPE) and is handled as graceful completion.
         signal(SIGPIPE, SIG_IGN)
 
+        // Keep the machine awake for the capture's lifetime when requested, so
+        // idle sleep can't silently interrupt a long recording (`--keep-awake`).
+        // Released on every exit path (duration, signal, error, stop).
+        let sleepPreventer = SleepPreventer()
+        sleepPreventer.begin(sleepMode)
+        defer { sleepPreventer.end() }
+
         // Source attribution: route each separated source to its sink(s) in
         // addition to the mixed stream. The session delivers these on its IO
         // thread; sink writes are forwarded directly (errors surface later via
@@ -123,6 +134,16 @@ struct CaptureEngine {
         let ioQueue = DispatchQueue(label: "hark.capture.io")
         let failure = FailureBox()
         let done = DispatchSemaphore(value: 0)
+
+        // Stall watchdog: the OS can interrupt capture on screen lock, display/
+        // system sleep, or a device change, after which the backend stops
+        // delivering audio. The watchdog notices the silence and asks the
+        // session to restart (auto-resume), retrying until it recovers; with
+        // HARK_RECOVER_TIMEOUT set it stops cleanly if recovery keeps failing.
+        let watchdog: StallWatchdog? =
+            recovery.enabled
+            ? StallWatchdog(stallSeconds: recovery.stallSeconds, giveUpSeconds: recovery.giveUpSeconds)
+            : nil
 
         // --duration counts captured audio, not wall clock: the budget trims
         // the final chunk so the output holds exactly the requested length
@@ -151,6 +172,7 @@ struct CaptureEngine {
                     // write, no duration budget consumed — so the output holds a
                     // true gap and --duration still counts only captured audio.
                     if control?.isPaused == true { return }
+                    watchdog?.audioArrived()
                     silenceDetector?.observe(data)
                     let (chunk, exhausted) = budget?.consume(data) ?? (data, false)
                     if !chunk.isEmpty {
@@ -177,8 +199,37 @@ struct CaptureEngine {
         // An external stop (interactive Enter / remote /stop) wakes the same
         // wait loop as a signal.
         control?.setStopHandler { done.signal() }
+
+        // Drive the stall watchdog on a 1 s cadence while capturing.
+        var stallTimer: DispatchSourceTimer?
+        if let watchdog {
+            let timer = DispatchSource.makeTimerSource(
+                queue: DispatchQueue(label: "hark.capture.watchdog"))
+            timer.schedule(deadline: .now() + 1, repeating: 1)
+            timer.setEventHandler {
+                watchdog.setPaused(control?.isPaused == true)
+                switch watchdog.tick() {
+                case .none:
+                    break
+                case .restart(let first):
+                    if first {
+                        Log.notice("capture interrupted (display sleep/lock?) — attempting to resume…")
+                    }
+                    _ = session.restart()
+                case .resumed:
+                    Log.notice("capture resumed")
+                case .giveUp:
+                    Log.notice("capture could not be resumed; stopping")
+                    done.signal()
+                }
+            }
+            timer.resume()
+            stallTimer = timer
+        }
+
         let startedAt = Date()
         done.wait()
+        stallTimer?.cancel()
         watcher.cancel()
 
         // Tear down: stop capture, drain pending writes, finalize sinks
@@ -258,6 +309,7 @@ struct CaptureEngine {
         }
     }
 
+    /// Builds the stall watchdog from the environment, or nil when recovery is
     enum CaptureBackendChoice { case screenCaptureKit, coreAudio }
 
     /// Picks the system/app capture backend. `coreaudio`/`sckit` force one;

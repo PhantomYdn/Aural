@@ -96,6 +96,14 @@ public final class ScreenCaptureSession: NSObject, MultiTrackCaptureSession, SCS
 
     public func start(onAudio: @escaping @Sendable (Data) -> Void) throws {
         precondition(!started, "session already started")
+        self.onAudio = onAudio
+        try buildAndStart()
+        started = true
+    }
+
+    /// Builds the SCStream from the current shareable content and starts it.
+    /// Reused by `start` and `restart` (after an interruption).
+    private func buildAndStart() throws {
         guard CGPreflightScreenCaptureAccess() else {
             CGRequestScreenCaptureAccess()
             throw ScreenCaptureError.permissionDenied
@@ -126,10 +134,8 @@ public final class ScreenCaptureSession: NSObject, MultiTrackCaptureSession, SCS
             try stream.addStreamOutput(self, type: .microphone, sampleHandlerQueue: ioQueue)
         }
         self.stream = stream
-        self.onAudio = onAudio
 
         try Self.startCapture(stream)
-        started = true
     }
 
     public func stop() {
@@ -137,6 +143,29 @@ public final class ScreenCaptureSession: NSObject, MultiTrackCaptureSession, SCS
         Self.stopCapture(stream)
         self.stream = nil
         started = false
+    }
+
+    /// Rebuilds the SCStream after the OS stopped it (commonly on screen lock)
+    /// and resumes delivering to the original `onAudio`. Driven by the stall
+    /// watchdog; returns true if the stream restarted. Until the screen is
+    /// unlocked this may keep failing — the watchdog retries.
+    public func restart() -> Bool {
+        guard started else { return false }
+        if let stream { Self.stopCapture(stream); self.stream = nil }
+        // Drop buffered mix state and force the converters to rebuild for the
+        // new stream's format.
+        mixLock.lock()
+        systemQueue.removeAll()
+        micQueue.removeAll()
+        mixLock.unlock()
+        systemConverter = nil
+        micConverter = nil
+        do {
+            try buildAndStart()
+            return true
+        } catch {
+            return false
+        }
     }
 
     deinit { stop() }

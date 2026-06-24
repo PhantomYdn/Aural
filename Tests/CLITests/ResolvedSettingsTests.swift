@@ -23,6 +23,7 @@ struct ResolvedSettingsTests {
         #expect(s.bits == nil)
         #expect(s.useVad == true)
         #expect(s.useGain == true)
+        #expect(s.keepAwake == false)
         #expect(s.vadThreshold == nil)
         #expect(s.speakers == false)
         #expect(s.speakerMode == .auto)
@@ -93,6 +94,22 @@ struct ResolvedSettingsTests {
         #expect(s.useVad == false)  // --no-vad beats env/config
         #expect(s.silenceThreshold == -25)
         #expect(s.speakerMode == .acoustic)
+    }
+
+    @Test func keepAwakeFollowsFlagEnvConfigDefault() throws {
+        // default
+        #expect(try settings().keepAwake == false)
+        // config
+        var config = Configuration()
+        config.keepAwake = true
+        #expect(try settings(config: config).keepAwake == true)
+        // env overrides config
+        #expect(try settings(env: ["HARK_KEEP_AWAKE": "0"], config: config).keepAwake == false)
+        // flag overrides env + config
+        #expect(
+            try settings(["--keep-awake"], env: ["HARK_KEEP_AWAKE": "0"], config: config).keepAwake
+                == true)
+        #expect(try settings(["--no-keep-awake"], config: config).keepAwake == false)
     }
 
     @Test func emptyEnvValuesAreIgnored() throws {
@@ -166,8 +183,8 @@ extension ResolvedSettings {
         ResolvedSettings(
             engine: engine, language: language, translate: translate, micDevice: micDevice,
             directory: directory, captureBackend: captureBackend, rate: rate, bits: bits,
-            channels: channels, silenceThreshold: silenceThreshold, useVad: useVad,
-            vadThreshold: vadThreshold, useGain: useGain, speakers: speakers,
+            channels: channels, keepAwake: keepAwake, silenceThreshold: silenceThreshold,
+            useVad: useVad, vadThreshold: vadThreshold, useGain: useGain, speakers: speakers,
             speakerMode: speakerMode, speakerLabels: speakerLabels, diarizeEngine: diarizeEngine,
             maxSpeakers: maxSpeakers, speakerThreshold: speakerThreshold)
     }

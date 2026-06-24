@@ -21,6 +21,7 @@ enum StartupStatus {
         transcript: String?,
         speakers: String?,
         vad: Bool,
+        keepAwake: String? = nil,
         duration: Double?,
         split: String?
     ) -> String {
@@ -38,6 +39,7 @@ enum StartupStatus {
         row("transcript", transcript ?? "(none)")
         if let speakers { row("speakers", speakers) }
         row("vad", vad ? "on" : "off")
+        if let keepAwake { row("keep-awake", keepAwake) }
         if let duration {
             row("duration", String(format: "%g s", duration))
         }

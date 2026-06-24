@@ -25,6 +25,7 @@ struct Configuration: Codable, Equatable {
     var rate: Int?
     var bits: Int?
     var channels: Int?
+    var keepAwake: Bool?
 
     // Segmentation
     var silenceThreshold: Double?
@@ -47,6 +48,7 @@ struct Configuration: Codable, Equatable {
         case directory
         case captureBackend = "capture-backend"
         case rate, bits, channels
+        case keepAwake = "keep-awake"
         case silenceThreshold = "silence-threshold"
         case vad
         case vadThreshold = "vad-threshold"
@@ -130,6 +132,9 @@ struct Configuration: Codable, Equatable {
         TypedSetting(.channels, .int, "(auto)", \.channels,
             parse: { try ConfigKey.parseInt($0, .channels, oneOf: [1, 2]) }, format: { String($0) },
             summary: "Capture channels (1 mono, 2 stereo; auto by default)."),
+        TypedSetting(.keepAwake, .bool, "false", \.keepAwake,
+            parse: { try ConfigKey.parseBool($0, .keepAwake) }, format: ConfigKey.formatBool,
+            summary: "Keep the system awake while recording (also the display in --interactive)."),
 
         TypedSetting(.silenceThreshold, .double, "-50", \.silenceThreshold,
             parse: { try ConfigKey.parseThreshold($0, .silenceThreshold) }, format: ConfigKey.formatNumber,

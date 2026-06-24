@@ -71,7 +71,7 @@ struct ConfigurationTests {
             case .engine: raw = "whisper"
             case .model, .language, .device: raw = "x"
             case .directory: raw = NSTemporaryDirectory()  // must be an existing directory
-            case .translate, .vad, .gain, .speakers: raw = "true"
+            case .translate, .vad, .gain, .speakers, .keepAwake: raw = "true"
             case .captureBackend: raw = "sckit"
             case .rate: raw = "48000"
             case .bits: raw = "24"

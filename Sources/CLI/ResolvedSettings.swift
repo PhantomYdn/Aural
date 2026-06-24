@@ -20,6 +20,8 @@ struct ResolvedSettings: Equatable {
     let rate: Int?
     let bits: Int?
     let channels: Int?
+    /// Keep the machine awake while recording (display too in interactive mode).
+    let keepAwake: Bool
 
     let silenceThreshold: Double
     let useVad: Bool
@@ -86,6 +88,7 @@ struct ResolvedSettings: Equatable {
         let channels = try int(a.channels, .channels, config.channels) {
             try ConfigKey.parseInt($0, .channels, oneOf: [1, 2])
         }
+        let keepAwake = try bool(a.keepAwake, .keepAwake, config.keepAwake, default: false)
 
         let silenceThreshold = try double(a.silenceThreshold, .silenceThreshold, config.silenceThreshold) {
             try ConfigKey.parseThreshold($0, .silenceThreshold)
@@ -116,6 +119,7 @@ struct ResolvedSettings: Equatable {
             engine: engine, language: language, translate: translate, micDevice: micDevice,
             directory: directory,
             captureBackend: captureBackend, rate: rate, bits: bits, channels: channels,
+            keepAwake: keepAwake,
             silenceThreshold: silenceThreshold, useVad: useVad, vadThreshold: vadThreshold,
             useGain: useGain, speakers: speakers, speakerMode: speakerMode,
             speakerLabels: speakerLabels, diarizeEngine: diarizeEngine, maxSpeakers: maxSpeakers,

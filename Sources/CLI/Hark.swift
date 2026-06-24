@@ -38,7 +38,7 @@ struct Hark: ParsableCommand {
             model; apple/whisperkit/parakeet are alternatives (see --engine, \
             'hark models').
             """,
-        version: "0.1.0",
+        version: "0.2.0",
         subcommands: [
             Devices.self,
             Apps.self,
@@ -125,6 +125,13 @@ struct Hark: ParsableCommand {
         "Channel count: 1 or 2 (defaults based on the source, capped at 2).",
         valueName: "n"))
     var channels: Int?
+
+    @Flag(name: .customLong("keep-awake"), inversion: .prefixedNo, help: """
+        Keep the machine awake while recording so sleep can't interrupt capture \
+        (also keeps the display on with --interactive). Default off; --no-keep-awake \
+        forces it off. Or $HARK_KEEP_AWAKE / hark config.
+        """)
+    var keepAwake: Bool?
 
     @Option(name: .customLong("duration"), help: ArgumentHelp(
         "Live: stop capturing after this many seconds (otherwise Ctrl+C).",
@@ -603,6 +610,9 @@ struct Hark: ParsableCommand {
             deviceUID: settings.micDevice, rate: settings.rate ?? 44100, bits: settings.bits ?? 16,
             channels: settings.channels, captureSystem: captureSystem, apps: apps,
             excludeApps: excludeApps, mix: mix, captureBackend: settings.captureBackend)
+        // Keep-awake (display too in interactive mode); held for the capture only.
+        captureEngine.sleepMode = SleepPreventionMode.resolve(
+            keepAwake: settings.keepAwake, interactive: interactive)
         let (session, format, sourceLabel) = try captureEngine.makeCapture()
 
         // Startup status (PRD §6.8): summarise the resolved configuration on
@@ -626,7 +636,7 @@ struct Hark: ParsableCommand {
         defer { interactiveSession?.stop() }
 
         let metadata = WAVMetadata(
-            creationDate: Date(), software: "hark 0.1.0", title: sourceLabel)
+            creationDate: Date(), software: "hark 0.2.0", title: sourceLabel)
 
         var sinks: [AudioSink] = []
         if let audioDest = outputs.audio {
@@ -941,12 +951,15 @@ struct Hark: ParsableCommand {
         let speakersDesc: String? = settings.speakers
             ? "\(settings.speakerMode.rawValue) (\(settings.speakerLabels.you)/\(settings.speakerLabels.others))"
             : nil
+        let keepAwakeDesc = SleepPreventionMode.resolve(
+            keepAwake: settings.keepAwake, interactive: interactive).statusDescription
         return StartupStatus.render(
             engine: settings.engine, model: model, language: settings.language,
             translate: settings.translate, source: source,
             captureBackend: tapMode ? settings.captureBackend : nil,
             format: format, audio: audioDesc, transcript: transcriptDesc,
-            speakers: speakersDesc, vad: settings.useVad, duration: duration, split: split)
+            speakers: speakersDesc, vad: settings.useVad, keepAwake: keepAwakeDesc,
+            duration: duration, split: split)
     }
 
     // MARK: File input (transcode and/or transcribe)

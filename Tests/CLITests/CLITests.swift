@@ -449,7 +449,7 @@ struct StreamSegmenterTests {
         let seg = StreamSegmenter(
             format: format, silenceThresholdDBFS: -50,
             pauseSeconds: 0.5, maxWindowSeconds: 2.0, minSegmentSeconds: 0.2)
-        seg.onSegment = { data, start, end in captured.append((data.count, start, end)) }
+        seg.onSegment = { data, _, start, end in captured.append((data.count, start, end)) }
         return (seg, { captured })
     }
 
@@ -689,9 +689,9 @@ struct VadSegmenterTests {
         let captured = Captured()
         let seg = VadSegmenter(
             format: format, classifier: ScriptedVAD(windowSamples: windowSamples),
-            resample: { samples, _ in samples }, maxWindowSeconds: maxWindow,
+            resampler: IdentityResampler(), maxWindowSeconds: maxWindow,
             minSegmentSeconds: minSegment)
-        seg.onSegment = { data, start, end in captured.append((data.count, start, end)) }
+        seg.onSegment = { data, _, start, end in captured.append((data.count, start, end)) }
         return (seg, captured)
     }
 
@@ -739,6 +739,102 @@ struct VadSegmenterTests {
         seg.consume(quiet(0.2))  // silence closes the turn
         seg.finish()
         #expect(captured.all().isEmpty)  // 0.1 s < 0.3 s min -> dropped
+    }
+
+    // Regression for the segment-drift bug: when the capture rate differs from
+    // 16 kHz, the segmenter resamples to drive the VAD. With a *real* resampler,
+    // speech bursts at known source times must still be sliced and timestamped
+    // at those times — with no error that grows over the recording. The old
+    // two-clock design (VAD sample indices mapped onto a separate capture-rate
+    // byte buffer) accumulated resampler drift and, late in a recording, clipped
+    // or dropped whole turns. The fixture stream below would surface that as a
+    // misaligned/missing late burst.
+    @Test func realResamplerKeepsBurstsAlignedToSourceTime() {
+        guard let resampler = AVStreamResampler(inputRate: 44100) else { return }
+        let rate = 44100
+        let captureFormat = PCMFormat(sampleRate: rate, bitsPerSample: 16, channels: 1)
+        let captured = Captured()
+        // 4096-sample (256 ms) 16 kHz windows, matching the production VAD chunk.
+        let seg = VadSegmenter(
+            format: captureFormat, classifier: ScriptedVAD(windowSamples: 4096, threshold: 0.1),
+            resampler: resampler, maxWindowSeconds: 30, minSegmentSeconds: 0.2)
+        seg.onSegment = { _, _, start, end in captured.append((0, start, end)) }
+
+        // 44.1 kHz stream fed in 10 ms chunks: a 1.0 s burst every 8 s. Reaching
+        // ~80 s, any per-chunk drift (~1 ms/s) would be plainly visible.
+        let chunk = 441
+        let burstSeconds = 1.0
+        let periodSeconds = 8.0
+        let burstCount = 10
+        let totalSeconds = Double(burstCount) * periodSeconds
+        var phase = 0.0
+        var sampleIndex = 0
+        let totalSamples = Int(totalSeconds * Double(rate))
+        while sampleIndex < totalSamples {
+            var data = Data(capacity: chunk * 2)
+            for _ in 0..<chunk {
+                let t = Double(sampleIndex) / Double(rate)
+                let inBurst = (t.truncatingRemainder(dividingBy: periodSeconds)) < burstSeconds
+                var value: Int16 = 0
+                if inBurst {
+                    value = Int16(8000.0 * sin(phase))
+                    phase += 2.0 * Double.pi * 220.0 / Double(rate)
+                }
+                withUnsafeBytes(of: value.littleEndian) { data.append(contentsOf: $0) }
+                sampleIndex += 1
+            }
+            seg.consume(data)
+        }
+        seg.finish()
+
+        let segments = captured.all()
+        // Every burst is detected exactly once (none dropped).
+        #expect(segments.count == burstCount, "expected \(burstCount) segments, got \(segments.count)")
+        // Each burst is aligned to its source time within a fixed tolerance that
+        // does NOT grow with position (VAD window quantization + constant filter
+        // latency only) — the property the single-clock design guarantees.
+        for k in 0..<burstCount {
+            let expectedStart = Double(k) * periodSeconds
+            let match = segments.first { abs($0.1 - expectedStart) < 0.4 }
+            #expect(match != nil, "no segment aligned to burst \(k) at \(expectedStart)s; segments=\(segments.map { $0.1 })")
+        }
+    }
+}
+
+@Suite("Streaming resampler")
+struct StreamingResamplerTests {
+    /// The continuous resampler's cumulative output must track its input within
+    /// a small *constant* offset (filter latency), not an error that grows with
+    /// duration. Per-chunk stateless resampling (the original bug) drifted by
+    /// thousands of samples over two minutes; this locks in the fix.
+    @Test func cumulativeOutputTracksInputWithoutAccumulatingDrift() {
+        guard let resampler = AVStreamResampler(inputRate: 44100) else { return }
+        let inputRate = 44100
+        let chunk = 441  // 10 ms chunks => ~12k resample calls over the run
+        let seconds = 120
+        var fed = 0
+        var produced = 0
+        var phase = 0.0
+        let calls = seconds * inputRate / chunk
+        for _ in 0..<calls {
+            var samples = [Float](repeating: 0, count: chunk)
+            for i in 0..<chunk {
+                samples[i] = Float(sin(phase))
+                phase += 2.0 * Double.pi * 220.0 / Double(inputRate)
+            }
+            produced += resampler.resample(samples).count
+            fed += chunk
+        }
+        produced += resampler.flush().count
+
+        let expected = Double(fed) * 16000.0 / Double(inputRate)
+        let driftSamples = abs(Double(produced) - expected)
+        // Constant filter latency is on the order of a few hundred 16 kHz
+        // samples; a stateless per-chunk resampler would drift to several
+        // thousand over 120 s. 1600 samples (= 100 ms) cleanly separates them.
+        #expect(
+            driftSamples < 1600,
+            "resampler drifted \(driftSamples) samples over \(seconds)s (should be a small constant)")
     }
 }
 

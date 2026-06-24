@@ -2,11 +2,14 @@ import Encoders
 import Foundation
 
 /// A live segmenter: cuts a capture-format PCM stream into transcription-sized
-/// segments and reports each via `onSegment` as `(pcm, startSeconds, endSeconds)`.
-/// `StreamSegmenter` (amplitude threshold) and `VadSegmenter` (VAD) both conform,
-/// so `LiveTranscriber` can swap the runtime boundary detector transparently.
+/// segments and reports each via `onSegment` as `(pcm, format, startSeconds,
+/// endSeconds)`. The emitted `format` is the segment's own PCM format —
+/// `StreamSegmenter` (amplitude threshold) passes the capture format through
+/// unchanged, while `VadSegmenter` emits already-resampled 16 kHz mono audio —
+/// so `LiveTranscriber` can stage each segment correctly regardless of which
+/// boundary detector produced it.
 protocol SpeechSegmenter: AnyObject {
-    var onSegment: ((Data, Double, Double) -> Void)? { get set }
+    var onSegment: ((Data, PCMFormat, Double, Double) -> Void)? { get set }
     /// Feed captured PCM (called serially from the capture I/O queue).
     func consume(_ data: Data)
     /// Flush any trailing speech and release resources.
@@ -31,57 +34,66 @@ protocol VoiceActivityStream: AnyObject, Sendable {
 
 /// VAD-driven live segmenter (PRD §6.7 — the runtime fix for the amplitude-only
 /// "delay in a sound" heuristic). Captured PCM is fed (cheaply) on the I/O queue
-/// into an unbounded `AsyncStream`; a single consumer `Task` owns all state —
-/// it unpacks to mono Float, resamples to 16 kHz, accumulates fixed windows, and
-/// drives the injected `VoiceActivityStream`. Speech turns (`speechStart` →
-/// `speechEnd`) become segments; a long monologue is force-cut at
-/// `maxWindowSeconds`; sub-`minSegmentSeconds` turns are dropped. Timestamps are
-/// derived from the byte clock and stay sample-accurate.
+/// into an unbounded `AsyncStream`; a single consumer `Task` owns all state.
+///
+/// The consumer unpacks each chunk to mono Float and resamples it to 16 kHz
+/// through one **continuous** resampler, appending to a single retained 16 kHz
+/// buffer (the "slab"). The VAD is driven from that same buffer, and speech
+/// turns are sliced **directly out of it by 16 kHz sample index** — so there is
+/// exactly one clock and segment boundaries can never drift from the audio (the
+/// earlier two-clock design, which mapped VAD sample indices back onto a
+/// separate capture-rate byte buffer, accumulated resampler drift and dropped
+/// whole turns on long recordings). Segments are emitted as 16 kHz mono 16-bit
+/// PCM — already in whisper's native format, so no second resample is needed.
+///
+/// A speech turn (`speechStart` → `speechEnd`) becomes a segment; a long
+/// monologue is force-cut at `maxWindowSeconds`; sub-`minSegmentSeconds` turns
+/// are dropped. While idle, the slab is trimmed to a short guard window so a
+/// back-dated `speechStart` (VAD padding) still has its leading audio.
 final class VadSegmenter: SpeechSegmenter, @unchecked Sendable {
-    var onSegment: ((Data, Double, Double) -> Void)?
+    var onSegment: ((Data, PCMFormat, Double, Double) -> Void)?
 
-    private let format: PCMFormat
+    /// The PCM format every VAD segment is emitted in (whisper's native format).
+    static let segmentFormat = PCMFormat(sampleRate: 16000, bitsPerSample: 16, channels: 1)
+    private static let outputRate = 16000
+
+    private let captureFormat: PCMFormat
     private let classifier: VoiceActivityStream
-    private let resample: @Sendable ([Float], Double) throws -> [Float]
+    private let resampler: StreamResampler
     private let windowSamples: Int
-    private let maxWindowSeconds: Double
-    private let minSegmentSeconds: Double
-    private let byteRate: Double
-    private let frameSize: Int
-    private let inputRate: Double
-    /// Audio kept ahead of `rawBaseSeconds` while idle, so a back-dated
+    private let maxWindowSamples: Int
+    private let minSegmentSamples: Int
+    /// Audio kept ahead of the live point while idle, so a back-dated
     /// `speechStart` (VAD padding) still has its leading audio available.
-    private let silenceGuardSeconds = 2.0
+    private let guardSamples = 2 * 16000
 
     private let continuation: AsyncStream<Data>.Continuation
     private let done = DispatchSemaphore(value: 0)
     private var finished = false
     private var task: Task<Void, Never>? = nil
 
-    // State owned exclusively by the consumer Task (no locks).
-    private var raw = Data()
-    private var rawBaseSeconds = 0.0
-    private var floatAccum = [Float]()
-    private var processedSamples16k = 0
+    // State owned exclusively by the consumer Task (no locks). A single 16 kHz
+    // clock: `slabBase + windowOffset` is the absolute count of 16 kHz samples
+    // fed to the VAD, the same index space VAD events report in.
+    private var slab = [Float]()  // retained 16 kHz samples
+    private var slabBase = 0  // absolute 16 kHz index of slab[0]
+    private var windowOffset = 0  // index within slab of the next sample to feed the VAD
     private var triggered = false
-    private var segmentStartSeconds = 0.0
+    private var segmentStart = 0  // absolute 16 kHz index of the open turn
 
     init(
         format: PCMFormat,
         classifier: VoiceActivityStream,
-        resample: @escaping @Sendable ([Float], Double) throws -> [Float],
+        resampler: StreamResampler,
         maxWindowSeconds: Double,
         minSegmentSeconds: Double
     ) {
-        self.format = format
+        self.captureFormat = format
         self.classifier = classifier
-        self.resample = resample
+        self.resampler = resampler
         self.windowSamples = max(1, classifier.windowSamples)
-        self.maxWindowSeconds = maxWindowSeconds
-        self.minSegmentSeconds = minSegmentSeconds
-        self.byteRate = Double(format.byteRate)
-        self.frameSize = max(1, format.bytesPerFrame)
-        self.inputRate = Double(format.sampleRate)
+        self.maxWindowSamples = max(1, Int(maxWindowSeconds * Double(Self.outputRate)))
+        self.minSegmentSamples = max(0, Int(minSegmentSeconds * Double(Self.outputRate)))
 
         let (stream, continuation) = AsyncStream<Data>.makeStream(
             of: Data.self, bufferingPolicy: .unbounded)
@@ -108,97 +120,122 @@ final class VadSegmenter: SpeechSegmenter, @unchecked Sendable {
 
     private func consumeAsync(_ data: Data) async {
         guard !data.isEmpty else { return }
-        raw.append(data)
-        let mono = VadSegmenter.unpackMono(data, format: format)
-        guard let resampled = try? resample(mono, inputRate) else { return }
-        floatAccum.append(contentsOf: resampled)
-        while floatAccum.count >= windowSamples {
-            let window = Array(floatAccum.prefix(windowSamples))
-            floatAccum.removeFirst(windowSamples)
+        let mono = VadSegmenter.unpackMono(data, format: captureFormat)
+        let resampled = resampler.resample(mono)
+        guard !resampled.isEmpty else { return }
+        slab.append(contentsOf: resampled)
+        await processReadyWindows()
+    }
+
+    /// Feeds every full window now available in the slab to the VAD.
+    private func processReadyWindows() async {
+        while slab.count - windowOffset >= windowSamples {
+            let window = Array(slab[windowOffset..<windowOffset + windowSamples])
+            windowOffset += windowSamples
             await processWindow(window)
         }
     }
 
     private func processWindow(_ window: [Float]) async {
-        processedSamples16k += window.count
         let event = try? await classifier.process(window)
         switch event {
         case .speechStart(let sample):
             if !triggered {
                 triggered = true
-                segmentStartSeconds = max(rawBaseSeconds, Double(sample) / 16000.0)
-                dropRaw(before: segmentStartSeconds)
+                // Can't predate audio we still hold (idle trim may have dropped
+                // earlier samples); clamp to the slab base.
+                segmentStart = max(slabBase, sample)
+                dropSlab(before: segmentStart)
             }
         case .speechEnd(let sample):
             if triggered {
-                emit(start: segmentStartSeconds, end: Double(sample) / 16000.0)
+                emit(start: segmentStart, end: max(segmentStart, sample))
                 triggered = false
             }
         case .none:
             break
         }
 
-        let now = Double(processedSamples16k) / 16000.0
+        let now = slabBase + windowOffset
         if triggered {
             // Long monologue with no pause: force a cut at the window cap.
-            if now - segmentStartSeconds >= maxWindowSeconds {
-                emit(start: segmentStartSeconds, end: now)
-                segmentStartSeconds = now
+            if now - segmentStart >= maxWindowSamples {
+                emit(start: segmentStart, end: now)
+                segmentStart = now
             }
         } else {
             // Idle: bound memory but keep a guard window for back-dated starts.
-            dropRaw(before: now - silenceGuardSeconds)
+            dropSlab(before: now - guardSamples)
         }
     }
 
     private func drain() async {
-        if !floatAccum.isEmpty {
-            let window = floatAccum
-            floatAccum.removeAll()
+        // Flush the resampler tail so the final words aren't lost, then process
+        // whatever windows (full or partial) remain.
+        let tail = resampler.flush()
+        if !tail.isEmpty { slab.append(contentsOf: tail) }
+        await processReadyWindows()
+        if slab.count > windowOffset {
+            let window = Array(slab[windowOffset...])
+            windowOffset = slab.count
             await processWindow(window)
         }
         if triggered {
-            emit(start: segmentStartSeconds, end: Double(processedSamples16k) / 16000.0)
+            emit(start: segmentStart, end: slabBase + windowOffset)
             triggered = false
         }
-        raw.removeAll()
+        slab.removeAll()
     }
 
-    // MARK: Raw-buffer slicing (time → frame-aligned bytes)
+    // MARK: Slab management (single 16 kHz clock)
 
-    private func frameAlignedBytes(_ seconds: Double) -> Int {
-        let n = Int((seconds * byteRate).rounded())
-        return max(0, n - (n % frameSize))
-    }
-
-    /// Drops buffered audio older than `seconds`, advancing the base clock.
-    private func dropRaw(before seconds: Double) {
-        guard seconds > rawBaseSeconds else { return }
-        let drop = min(raw.count, frameAlignedBytes(seconds - rawBaseSeconds))
+    /// Drops 16 kHz samples older than the absolute `index`, never discarding
+    /// audio not yet fed to the VAD.
+    private func dropSlab(before index: Int) {
+        let drop = min(windowOffset, index - slabBase)
         guard drop > 0 else { return }
-        raw.removeFirst(drop)
-        rawBaseSeconds += Double(drop) / byteRate
+        slab.removeFirst(drop)
+        slabBase += drop
+        windowOffset -= drop
     }
 
-    /// Emits the segment spanning `[start, end]` (trimming leading silence).
-    /// Turns shorter than `minSegmentSeconds` are dropped, advancing the clock.
-    private func emit(start: Double, end: Double) {
-        guard end - start >= minSegmentSeconds else {
-            dropRaw(before: end)
+    /// Emits the segment spanning the absolute 16 kHz range `[start, end)`,
+    /// sliced directly from the slab. Turns shorter than `minSegmentSeconds`
+    /// are dropped. Advances the slab past the emitted audio.
+    private func emit(start: Int, end: Int) {
+        guard end - start >= minSegmentSamples else {
+            dropSlab(before: end)
             return
         }
-        dropRaw(before: start)
-        let want = frameAlignedBytes(end - rawBaseSeconds)
-        let count = min(raw.count, want)
-        guard count > 0 else { return }
-        let segment = Data(raw.prefix(count))
-        let actualEnd = rawBaseSeconds + Double(count) / byteRate
-        onSegment?(segment, start, actualEnd)
-        raw.removeFirst(count)
-        rawBaseSeconds = actualEnd
+        let lo = max(0, start - slabBase)
+        let hi = min(slab.count, end - slabBase)
+        guard hi > lo else {
+            dropSlab(before: end)
+            return
+        }
+        let pcm = VadSegmenter.packInt16(slab[lo..<hi])
+        let startSeconds = Double(slabBase + lo) / Double(Self.outputRate)
+        let endSeconds = Double(slabBase + hi) / Double(Self.outputRate)
+        onSegment?(pcm, Self.segmentFormat, startSeconds, endSeconds)
+        dropSlab(before: slabBase + hi)
     }
 
-    // MARK: PCM → mono Float
+    // MARK: PCM packing/unpacking
+
+    /// Packs 16 kHz mono Float samples (-1…1) into little-endian Int16 PCM.
+    static func packInt16(_ samples: ArraySlice<Float>) -> Data {
+        var data = Data(count: samples.count * 2)
+        data.withUnsafeMutableBytes { raw in
+            let out = raw.bindMemory(to: Int16.self)
+            var i = 0
+            for sample in samples {
+                let scaled = (Double(sample) * 32767.0).rounded()
+                out[i] = Int16(max(-32768.0, min(32767.0, scaled)))
+                i += 1
+            }
+        }
+        return data
+    }
 
     /// Unpacks packed little-endian PCM to mono Float (channels averaged,
     /// normalized to -1…1). Mirrors `peakAmplitude`'s bit-depth handling.

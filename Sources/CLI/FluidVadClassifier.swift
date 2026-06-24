@@ -103,12 +103,16 @@ enum SpeechSegmenterFactory {
                 threshold: vadThreshold ?? FluidVadClassifier.defaultThreshold)
         {
             Log.verbose("live segmentation: VAD (Silero, FluidAudio)")
-            let converter = AudioConverter()
-            let resample: @Sendable ([Float], Double) throws -> [Float] = { samples, rate in
-                rate == 16000 ? samples : try converter.resample(samples, from: rate)
+            // One continuous resampler for the whole stream (no per-chunk drift);
+            // identity when the source is already 16 kHz.
+            var resampler: StreamResampler = IdentityResampler()
+            if format.sampleRate != 16000,
+                let streaming = AVStreamResampler(inputRate: Double(format.sampleRate))
+            {
+                resampler = streaming
             }
             return VadSegmenter(
-                format: format, classifier: classifier, resample: resample,
+                format: format, classifier: classifier, resampler: resampler,
                 maxWindowSeconds: maxWindowSeconds, minSegmentSeconds: minSegmentSeconds)
         }
         Log.verbose("live segmentation: amplitude threshold (\(silenceThresholdDBFS) dBFS)")

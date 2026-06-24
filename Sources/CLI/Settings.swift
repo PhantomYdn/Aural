@@ -97,6 +97,7 @@ enum ConfigKey: String, CaseIterable {
     case rate
     case bits
     case channels
+    case keepAwake = "keep-awake"
     case silenceThreshold = "silence-threshold"
     case vad
     case vadThreshold = "vad-threshold"
