@@ -4,7 +4,7 @@ All notable changes to Hark are documented here. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.2.1] - 2026-06-24
 
 ### Fixed
 - Live transcription no longer drops whole turns. The segmenter only transcribed
@@ -97,5 +97,6 @@ transcribes them, and composes into Unix pipelines.
 - The release binary is signed (Developer ID) and notarized, so it passes
   Gatekeeper; its stable code identity keeps privacy grants across upgrades.
 
+[0.2.1]: https://github.com/PhantomYdn/hark/releases/tag/v0.2.1
 [0.2.0]: https://github.com/PhantomYdn/hark/releases/tag/v0.2.0
 [0.1.0]: https://github.com/PhantomYdn/hark/releases/tag/v0.1.0
