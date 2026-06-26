@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="470" viewBox="0 0 900 470" role="img" aria-label="hark terminal session">
+  <defs>
+    <linearGradient id="win" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#161B22"/>
+      <stop offset="1" stop-color="#0D1117"/>
+    </linearGradient>
+  </defs>
+
+  <!-- window -->
+  <rect x="2" y="2" width="896" height="466" rx="14" fill="url(#win)" stroke="#30363D" stroke-width="1.5"/>
+  <!-- title bar -->
+  <path d="M2 16 a14 14 0 0 1 14 -14 h868 a14 14 0 0 1 14 14 v30 h-896 z" fill="#21262D"/>
+  <circle cx="28" cy="24" r="6.5" fill="#FF5F57"/>
+  <circle cx="50" cy="24" r="6.5" fill="#FEBC2E"/>
+  <circle cx="72" cy="24" r="6.5" fill="#28C840"/>
+  <text x="450" y="29" text-anchor="middle"
+        font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif"
+        font-size="14" fill="#7D8590">hark — zsh</text>
+
+  <g font-family="'SF Mono','JetBrains Mono','Fira Code',ui-monospace,Menlo,Consolas,monospace"
+     font-size="18.5" xml:space="preserve">
+    <!-- command 1 -->
+    <text y="96"><tspan x="28" fill="#2DD4BF">$ </tspan><tspan fill="#79C0FF">hark</tspan><tspan fill="#E6EDF3"> --system --mix --speakers -t meeting.srt</tspan></text>
+    <!-- status -->
+    <text y="128"><tspan x="28" fill="#F85149">&#9679;</tspan><tspan fill="#8B949E"> rec   system+mic &#183; parakeet/v3 &#183; 44.1 kHz</tspan></text>
+    <!-- transcript -->
+    <text y="162"><tspan x="28" fill="#2DD4BF">[You]</tspan><tspan fill="#C9D1D9"> should we ship the beta this week?</tspan></text>
+    <text y="194"><tspan x="28" fill="#A371F7">[Speaker 1]</tspan><tspan fill="#C9D1D9"> capture's stable now &#8212; ship it.</tspan></text>
+    <text y="226"><tspan x="28" fill="#2DD4BF">[You]</tspan><tspan fill="#C9D1D9"> great, cutting the release tonight.</tspan></text>
+    <text y="258"><tspan x="28" fill="#8B949E">^C  </tspan><tspan fill="#3FB950">saved meeting.srt &#183; 412 words</tspan></text>
+
+    <!-- more one-liners -->
+    <text y="320"><tspan x="28" fill="#2DD4BF">$ </tspan><tspan fill="#79C0FF">hark</tspan><tspan fill="#E6EDF3"> -i meeting.m4a -t notes.txt</tspan><tspan x="492" fill="#6E7781"># transcribe a file</tspan></text>
+    <text y="352"><tspan x="28" fill="#2DD4BF">$ </tspan><tspan fill="#79C0FF">hark</tspan><tspan fill="#E6EDF3"> -i in.wav -a out.flac</tspan><tspan x="492" fill="#6E7781"># transcode, no model</tspan></text>
+    <text y="384"><tspan x="28" fill="#2DD4BF">$ </tspan><tspan fill="#79C0FF">hark</tspan><tspan fill="#E6EDF3"> --interactive --system</tspan><tspan x="492" fill="#6E7781"># live captions on screen</tspan></text>
+    <text y="416"><tspan x="28" fill="#2DD4BF">$ </tspan><tspan fill="#E6EDF3">_</tspan></text>
+  </g>
+</svg>

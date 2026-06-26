@@ -15,6 +15,10 @@ Only the encoder is included; the MP3 decoder (mpglib) and SIMD
 (xmm_quantize_sub.c) sources are omitted, and a minimal Sources/CLame/config.h
 replaces LAME's autoconf-generated config.h.
 
+Per the LGPL, the corresponding libmp3lame source is included in this
+repository (Sources/CLame/) so the component can be modified and the binary
+relinked.
+
 FlyingFox / FlyingSocks — embedded HTTP server
 ----------------------------------------------
 The remote-control agent (`hark --remote-control`, PRD §6.10) serves its

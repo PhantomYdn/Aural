@@ -12,7 +12,7 @@ TESTING_FLAGS := \
 	-Xlinker -rpath -Xlinker $(CLT)/Library/Developer/Frameworks \
 	-Xlinker -rpath -Xlinker $(CLT)/Library/Developer/usr/lib
 
-.PHONY: build test release clean
+.PHONY: build test release clean demo
 
 build:
 	swift build
@@ -25,3 +25,12 @@ release:
 
 clean:
 	swift package clean
+
+# Render the README demo GIF (assets/demo.gif) from demo/hark.tape.
+# Requires VHS + ffmpeg:  brew install vhs ffmpeg
+# Builds a release binary and puts it first on PATH so the tape's `hark`
+# resolves to this checkout.
+demo: release
+	@command -v vhs >/dev/null || { echo "vhs not found — run: brew install vhs ffmpeg"; exit 1; }
+	PATH="$(PWD)/.build/release:$$PATH" vhs demo/hark.tape
+	@echo "wrote assets/demo.gif"

@@ -1,0 +1,79 @@
+name: Bug report
+description: Something isn't working the way it should
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug! Please search
+        [existing issues](https://github.com/PhantomYdn/hark/issues) first.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: A clear description of the bug, and what you expected instead.
+      placeholder: When I run `hark --system ...`, the transcript is empty, but I expected …
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: The exact command(s) you ran.
+      placeholder: |
+        1. `hark --system --mix -t out.srt`
+        2. Speak for ~30s
+        3. …
+      render: shell
+    validations:
+      required: true
+  - type: input
+    id: hark-version
+    attributes:
+      label: hark version
+      description: Output of `hark --version`.
+      placeholder: "0.2.1"
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: How did you install hark?
+      options:
+        - Homebrew tap
+        - Direct binary download (GitHub Release)
+        - Built from source
+    validations:
+      required: true
+  - type: input
+    id: macos
+    attributes:
+      label: macOS version & chip
+      placeholder: "macOS 15.1, Apple Silicon (M3)"
+    validations:
+      required: true
+  - type: dropdown
+    id: engine
+    attributes:
+      label: Transcription engine (if relevant)
+      options:
+        - whisper
+        - apple
+        - whisperkit
+        - parakeet
+        - "n/a"
+  - type: textarea
+    id: logs
+    attributes:
+      label: Verbose output / logs
+      description: Re-run with `-v` and paste relevant output. Redact anything private.
+      render: shell
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Confirmations
+      options:
+        - label: I'm on the latest release (or built from `main`).
+          required: true
+        - label: I checked that the relevant macOS permission is granted (see docs/permissions.md).
+          required: false

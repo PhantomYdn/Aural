@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Questions & ideas
+    url: https://github.com/PhantomYdn/hark/discussions
+    about: Ask a question, share a workflow, or float an idea before opening an issue.
+  - name: Permissions & TCC setup help
+    url: https://github.com/PhantomYdn/hark/blob/main/docs/permissions.md
+    about: Microphone / System Audio Recording / Speech permission troubleshooting.
+  - name: Report a security vulnerability
+    url: https://github.com/PhantomYdn/hark/security/advisories/new
+    about: Please report security issues privately, not as public issues.

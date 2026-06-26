@@ -7,6 +7,10 @@
 
 # Scratch audio/transcripts from manual runs — never commit these
 /Tests/ManualTests/
+*.mp3
+/*.txt
+# …except the tiny committed demo fixture
+!demo/sample.mp3
 
 # Xcode
 *.xcodeproj/

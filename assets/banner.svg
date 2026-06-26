@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="340" viewBox="0 0 1000 340" role="img" aria-label="hark — capture and transcribe macOS audio from a single native CLI">
+  <defs>
+    <linearGradient id="bgGrad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0D1117"/>
+      <stop offset="1" stop-color="#161B22"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#2DD4BF"/>
+      <stop offset="0.55" stop-color="#3B82F6"/>
+      <stop offset="1" stop-color="#6366F1"/>
+    </linearGradient>
+    <linearGradient id="stroke" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#2DD4BF" stop-opacity="0.5"/>
+      <stop offset="0.5" stop-color="#3B82F6" stop-opacity="0.25"/>
+      <stop offset="1" stop-color="#6366F1" stop-opacity="0.5"/>
+    </linearGradient>
+  </defs>
+
+  <!-- card -->
+  <rect x="2" y="2" width="996" height="336" rx="28" fill="url(#bgGrad)"/>
+  <rect x="2.5" y="2.5" width="995" height="335" rx="27.5" fill="none" stroke="url(#stroke)" stroke-width="2"/>
+
+  <!-- faint background waveform -->
+  <g opacity="0.10" fill="url(#accent)">
+    <rect x="60"  y="250" width="9" height="40"  rx="4.5"/>
+    <rect x="84"  y="232" width="9" height="76"  rx="4.5"/>
+    <rect x="108" y="258" width="9" height="24"  rx="4.5"/>
+    <rect x="820" y="58"  width="9" height="40"  rx="4.5"/>
+    <rect x="844" y="40"  width="9" height="76"  rx="4.5"/>
+    <rect x="868" y="64"  width="9" height="24"  rx="4.5"/>
+    <rect x="892" y="48"  width="9" height="56"  rx="4.5"/>
+  </g>
+
+  <!-- logo lockup -->
+  <g transform="translate(312,96)">
+    <g fill="url(#accent)">
+      <rect x="0"  y="34" width="14" height="22" rx="7"/>
+      <rect x="25" y="18" width="14" height="54" rx="7"/>
+      <rect x="50" y="-8" width="14" height="106" rx="7"/>
+      <rect x="75" y="14" width="14" height="62" rx="7"/>
+      <rect x="100" y="32" width="14" height="26" rx="7"/>
+    </g>
+    <text x="138" y="76"
+          font-family="'SF Mono','JetBrains Mono','Fira Code',ui-monospace,Menlo,Consolas,monospace"
+          font-size="96" font-weight="700" letter-spacing="-4"
+          fill="#E6EDF3">hark</text>
+  </g>
+
+  <!-- tagline -->
+  <text x="500" y="258" text-anchor="middle"
+        font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif"
+        font-size="27" font-weight="500" fill="#8B949E">Capture &amp; transcribe macOS audio from a single native CLI</text>
+  <text x="500" y="298" text-anchor="middle"
+        font-family="'SF Mono','JetBrains Mono','Fira Code',ui-monospace,Menlo,Consolas,monospace"
+        font-size="17" letter-spacing="0.5" fill="#3B82F6">microphone &#183; system &#183; per-app &#8594; text</text>
+</svg>
