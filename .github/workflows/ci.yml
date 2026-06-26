@@ -15,6 +15,9 @@ jobs:
     # macOS 14 runner is Apple Silicon and matches the minimum OS (14.4),
     # which the Core Audio process-tap API requires.
     runs-on: macos-14
+    # Hard cap so a hung test fails the job in minutes instead of burning the
+    # full 6 h runner budget (regression guard for the VAD-segmenter deadlock).
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
@@ -35,4 +38,12 @@ jobs:
         # Gated integration tests (whisper.cpp, models, Speech authorization)
         # skip automatically when their prerequisites are absent, so the suite
         # stays green on a stock runner.
+        #
+        # LIBDISPATCH_COOPERATIVE_POOL_STRICT disables Dispatch's overflow-thread
+        # recovery so that any test which blocks a Swift-concurrency cooperative
+        # worker while awaiting the same pool deadlocks deterministically here
+        # (instead of hanging only on the low-core CI runner). This is the class
+        # of bug that previously hung the suite for hours.
+        env:
+          LIBDISPATCH_COOPERATIVE_POOL_STRICT: "1"
         run: swift test

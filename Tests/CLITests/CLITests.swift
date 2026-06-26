@@ -695,11 +695,11 @@ struct VadSegmenterTests {
         return (seg, captured)
     }
 
-    @Test func speechThenPauseEmitsOneSegment() {
+    @Test func speechThenPauseEmitsOneSegment() async {
         let (seg, captured) = makeSegmenter()
         seg.consume(loud(0.5))
         seg.consume(quiet(0.2))
-        seg.finish()
+        await seg.finishAsync()
         let result = captured.all()
         #expect(result.count == 1)
         #expect(result[0].0 == 16000)              // 0.5 s of speech (bytes)
@@ -707,40 +707,40 @@ struct VadSegmenterTests {
         #expect(abs(result[0].2 - 0.5) < 1e-6)     // end
     }
 
-    @Test func continuousSpeechCutAtMaxWindow() {
+    @Test func continuousSpeechCutAtMaxWindow() async {
         let (seg, captured) = makeSegmenter(maxWindow: 0.4)
         seg.consume(loud(0.7))  // no pause: forced cut at 0.4 s, 0.3 s tail
-        seg.finish()
+        await seg.finishAsync()
         let result = captured.all()
         #expect(result.count == 2)
         #expect(result[0].0 == 12800)  // forced cut at the 0.4 s window cap
     }
 
-    @Test func pureSilenceEmitsNothing() {
+    @Test func pureSilenceEmitsNothing() async {
         let (seg, captured) = makeSegmenter()
         seg.consume(quiet(0.5))
-        seg.finish()
+        await seg.finishAsync()
         #expect(captured.all().isEmpty)
     }
 
-    @Test func finishFlushesTrailingSpeech() {
+    @Test func finishFlushesTrailingSpeech() async {
         let (seg, captured) = makeSegmenter()
         seg.consume(loud(0.25))  // no trailing pause
-        seg.finish()
+        await seg.finishAsync()
         let result = captured.all()
         #expect(result.count == 1)
         #expect(result[0].0 == 8000)
         #expect(abs(result[0].2 - 0.25) < 1e-6)
     }
 
-    @Test func shortBlipCapturedAtDrainNotDropped() {
+    @Test func shortBlipCapturedAtDrainNotDropped() async {
         // Cover-all: a sub-minSegment blip isn't cut as its own VAD turn, but the
         // trailing flush still captures the audio rather than silently dropping
         // it (the gating bug that lost whole turns).
         let (seg, captured) = makeSegmenter(minSegment: 0.3)
         seg.consume(loud(0.1))   // one 0.1 s speech window
         seg.consume(quiet(0.2))  // silence — too short to cut, but not dropped
-        seg.finish()
+        await seg.finishAsync()
         let result = captured.all()
         #expect(result.count == 1)     // the blip is transcribed, not dropped
         #expect(result[0].0 > 0)        // non-empty audio
@@ -754,7 +754,7 @@ struct VadSegmenterTests {
     // byte buffer) accumulated resampler drift and, late in a recording, clipped
     // or dropped whole turns. The fixture stream below would surface that as a
     // misaligned/missing late burst.
-    @Test func realResamplerKeepsBurstsAlignedToSourceTime() {
+    @Test func realResamplerKeepsBurstsAlignedToSourceTime() async {
         guard let resampler = AVStreamResampler(inputRate: 44100) else { return }
         let rate = 44100
         let captureFormat = PCMFormat(sampleRate: rate, bitsPerSample: 16, channels: 1)
@@ -790,7 +790,7 @@ struct VadSegmenterTests {
             }
             seg.consume(data)
         }
-        seg.finish()
+        await seg.finishAsync()
 
         let segments = captured.all()
         // Every burst is detected exactly once (none dropped).

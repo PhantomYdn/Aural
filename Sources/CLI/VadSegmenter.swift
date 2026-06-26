@@ -120,6 +120,19 @@ final class VadSegmenter: SpeechSegmenter, @unchecked Sendable {
         done.wait()
     }
 
+    /// Async variant of `finish()` for callers already inside the Swift
+    /// concurrency runtime (e.g. unit tests): it awaits the consumer `Task`
+    /// directly instead of blocking the calling thread on a semaphore. Blocking
+    /// would stall a cooperative worker while that same `Task` still needs the
+    /// pool to drain — a deadlock on core-constrained hosts (CI). Awaiting keeps
+    /// the thread free, so the consumer can finish.
+    func finishAsync() async {
+        if finished { return }
+        finished = true
+        continuation.finish()
+        await task?.value
+    }
+
     // MARK: Consumer (single Task)
 
     private func consumeAsync(_ data: Data) async {
