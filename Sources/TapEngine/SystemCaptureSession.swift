@@ -12,7 +12,9 @@ import Foundation
 ///
 /// Reading a tap requires the "System Audio Recording" TCC permission; for
 /// command-line tools macOS attributes it to the launching terminal.
-public final class SystemCaptureSession: MultiTrackCaptureSession, @unchecked Sendable {
+public final class SystemCaptureSession: MultiTrackCaptureSession, MicMutableCaptureSession,
+    @unchecked Sendable
+{
     private let scope: TapScope
     private let micDeviceUID: String?
     private let outputFormat: PCMFormat
@@ -29,6 +31,10 @@ public final class SystemCaptureSession: MultiTrackCaptureSession, @unchecked Se
     /// When set before `start` (and a mic is mixed in), each source is also
     /// delivered separately for attribution (PRD §6.7a).
     public var onSourceAudio: (@Sendable (CaptureSource, Data) -> Void)?
+    /// When set and it returns true, the mic is dropped from the mix (the main
+    /// stream becomes system-only) and the separated `.microphone` source is
+    /// silenced — system audio keeps recording (interactive mute, PRD §6.9).
+    public var micMuted: (@Sendable () -> Bool)?
     /// Stored so the tap/aggregate/IOProc can be rebuilt after an interruption.
     private var onAudio: (@Sendable (Data) -> Void)?
     private let ioQueue = DispatchQueue(label: "hark.tap.io")
@@ -188,9 +194,14 @@ public final class SystemCaptureSession: MultiTrackCaptureSession, @unchecked Se
             }
             guard ablPointer.count > 0 else { return }
 
+            // Interactive mute (PRD §6.9): drop the mic from the mix so the
+            // main stream is system-only, and silence the separated mic source.
+            let muted = self.micMuted?() == true
             let buffer: AVAudioPCMBuffer?
             if let mixer = self.mixer {
-                buffer = mixer.mixedBuffer(from: inInputData, tapFormat: tapFormat)
+                buffer = muted
+                    ? mixer.systemBuffer(from: inInputData, tapFormat: tapFormat)
+                    : mixer.mixedBuffer(from: inInputData, tapFormat: tapFormat)
             } else {
                 buffer = AVAudioPCMBuffer(
                     pcmFormat: tapFormat,
@@ -214,7 +225,9 @@ public final class SystemCaptureSession: MultiTrackCaptureSession, @unchecked Se
                 if let micBuffer = mixer.micBuffer(from: inInputData, tapFormat: tapFormat),
                     let data = micConverter.convert(micBuffer)
                 {
-                    onSourceAudio(.microphone, data)
+                    // Muted: keep the source's byte-clock advancing with silence
+                    // so the "You" transcriber stays time-aligned but emits nothing.
+                    onSourceAudio(.microphone, muted ? Data(count: data.count) : data)
                 }
             }
         }

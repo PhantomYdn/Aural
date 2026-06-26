@@ -14,8 +14,8 @@ import ScreenCaptureKit
 /// session; it cannot run headless. The Core Audio `SystemCaptureSession` is the
 /// headless-capable fallback.
 @available(macOS 15.0, *)
-public final class ScreenCaptureSession: NSObject, MultiTrackCaptureSession, SCStreamOutput,
-    SCStreamDelegate, @unchecked Sendable
+public final class ScreenCaptureSession: NSObject, MultiTrackCaptureSession,
+    MicMutableCaptureSession, SCStreamOutput, SCStreamDelegate, @unchecked Sendable
 {
     public enum ScreenCaptureError: Error, CustomStringConvertible {
         case permissionDenied
@@ -65,6 +65,10 @@ public final class ScreenCaptureSession: NSObject, MultiTrackCaptureSession, SCS
     /// separately for attribution (PRD §6.7a). The two SCStream outputs are
     /// already separate, so this just tees them before mixing.
     public var onSourceAudio: (@Sendable (CaptureSource, Data) -> Void)?
+    /// When set and it returns true, the mic samples are zeroed before mixing
+    /// and before the separated `.microphone` source — the mix becomes
+    /// system-only and the "You" side falls silent (interactive mute, PRD §6.9).
+    public var micMuted: (@Sendable () -> Bool)?
 
     // Software mixer state (only used with --mix): converted, output-format
     // packed PCM queued per source and summed by sample position.
@@ -188,8 +192,12 @@ public final class ScreenCaptureSession: NSObject, MultiTrackCaptureSession, SCS
             }
         case .microphone:
             guard mixMic, let data = convert(sampleBuffer, converter: &micConverter) else { return }
-            onSourceAudio?(.microphone, data)
-            enqueue(mic: data)
+            // Interactive mute (PRD §6.9): zero the mic so the mix sums to
+            // system-only and the "You" source falls silent; queues stay
+            // byte-balanced so system/mic mixing stays time-aligned.
+            let mic = micMuted?() == true ? Data(count: data.count) : data
+            onSourceAudio?(.microphone, mic)
+            enqueue(mic: mic)
         default:
             break
         }

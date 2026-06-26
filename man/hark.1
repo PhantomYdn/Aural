@@ -276,7 +276,11 @@ The directory must already exist.
 Run a live capture in a minimal terminal UI: the transcript streams to the
 terminal and single keys control it \(em
 .B space
-pauses/resumes (the paused interval is not recorded) and
+pauses/resumes (the paused interval is not recorded),
+.B m
+mutes/unmutes the microphone (only the mic is silenced; recording continues),
+.B y
+yanks the transcript so far to the clipboard, and
 .B Enter
 finishes (Ctrl\-C also stops). Needs a TTY; not combined with
 .B \-i
@@ -500,7 +504,7 @@ hark \-a \- \-\-duration 10 | ffmpeg \-i \- out.mp3
 .fi
 .RE
 .PP
-Interactive meeting capture (space pauses, Enter finishes):
+Interactive meeting capture (space pauses, m mutes, y yanks, Enter finishes):
 .PP
 .RS
 .nf

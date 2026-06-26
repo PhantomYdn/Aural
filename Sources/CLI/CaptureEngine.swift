@@ -120,6 +120,12 @@ struct CaptureEngine {
         // thread; sink writes are forwarded directly (errors surface later via
         // each sink's own error path).
         let control = self.control
+        // Interactive mute (PRD §6.9): let the session silence only the mic on
+        // demand. Generic — only the interactive key reader ever toggles it, so
+        // the remote-control path leaves it inert. Set before `start`.
+        if let control, let mutable = session as? MicMutableCaptureSession {
+            mutable.micMuted = { control.isMuted }
+        }
         if !sourceSinks.isEmpty, let multi = session as? MultiTrackCaptureSession {
             let routes = sourceSinks
             multi.onSourceAudio = { source, data in

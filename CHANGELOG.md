@@ -4,6 +4,15 @@ All notable changes to Hark are documented here. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- Two interactive controls (`--interactive`): **m** mutes/unmutes the
+  microphone — only the mic is silenced, so any system audio keeps recording and
+  the timeline is preserved (distinct from pause, which omits the interval); the
+  hint shows it only when a mic is in the capture. **y** yanks the transcript
+  captured so far to the system clipboard (local only, no network).
+
 ## [0.2.1] - 2026-06-24
 
 ### Fixed

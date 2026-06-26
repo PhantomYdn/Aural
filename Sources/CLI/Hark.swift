@@ -261,8 +261,10 @@ struct Hark: ParsableCommand {
     @Flag(name: .customLong("interactive"), help: """
         Live: run in a minimal terminal UI showing the transcript, with \
         single-key controls — space to pause/resume (the paused interval is \
-        not recorded), Enter to finish (Ctrl-C also stops). Needs a terminal; \
-        not combined with -i or stdout output.
+        not recorded), m to mute/unmute the mic (only the mic is silenced; \
+        recording continues), y to yank the transcript so far to the clipboard, \
+        Enter to finish (Ctrl-C also stops). Needs a terminal; not combined \
+        with -i or stdout output.
         """)
     var interactive = false
 
@@ -620,6 +622,11 @@ struct Hark: ParsableCommand {
         StartupStatus.emit(liveStatusText(
             settings: settings, source: sourceLabel, format: format, outputs: outputs))
 
+        // Interactive controls (PRD §6.9): `m` mutes the mic only when one is in
+        // the capture (mic-only, or `--mix`); `y` yanks the transcript so far.
+        let hasMic = mix || !(captureSystem || !apps.isEmpty || !excludeApps.isEmpty)
+        let transcriptLog: TranscriptLog? = interactive ? TranscriptLog() : nil
+
         // Controls: interactive (PRD §6.9) shares a CaptureControl between the
         // key reader and the capture loop; the remote-control agent (PRD §6.10)
         // injects its own control. Both pause/resume/stop the same loop.
@@ -627,7 +634,8 @@ struct Hark: ParsableCommand {
         if interactive {
             let control = CaptureControl()
             captureEngine.control = control
-            let ui = InteractiveSession(control: control)
+            let ui = InteractiveSession(
+                control: control, hasMic: hasMic, transcriptLog: transcriptLog)
             ui.start()
             interactiveSession = ui
         } else if let externalControl {
@@ -653,20 +661,21 @@ struct Hark: ParsableCommand {
             try runSourceAttributedLive(
                 outputs: outputs, settings: settings, captureEngine: captureEngine,
                 session: session, format: format, mixedSinks: sinks, labels: labels,
-                systemDiarizer: nil)
+                systemDiarizer: nil, transcriptLog: transcriptLog)
             return
         case .sourceDiarized(let labels, .streaming):
             let diarizer = try makeStreamingDiarizer(settings: settings)
             try runSourceAttributedLive(
                 outputs: outputs, settings: settings, captureEngine: captureEngine,
                 session: session, format: format, mixedSinks: sinks, labels: labels,
-                systemDiarizer: diarizer)
+                systemDiarizer: diarizer, transcriptLog: transcriptLog)
             return
         case .singleDiarized(.streaming):
             let diarizer = try makeStreamingDiarizer(settings: settings)
             try runSingleDiarizedLive(
                 outputs: outputs, settings: settings, captureEngine: captureEngine,
-                session: session, format: format, mixedSinks: sinks, diarizer: diarizer)
+                session: session, format: format, mixedSinks: sinks, diarizer: diarizer,
+                transcriptLog: transcriptLog)
             return
         case .sourceDiarized(let labels, .offline):
             try runOfflineLive(
@@ -691,7 +700,8 @@ struct Hark: ParsableCommand {
                 useVad: settings.useVad, vadThreshold: settings.vadThreshold, useGain: settings.useGain,
                 // Interactive: a file destination never reaches the UI, so echo
                 // captions to the screen too (PRD §6.9).
-                screenEcho: interactive && transcriptDest.isFile)
+                screenEcho: interactive && transcriptDest.isFile,
+                transcriptLog: transcriptLog)
             sinks.append(transcriber)
             liveTranscriber = transcriber
             if !interactive && externalControl == nil && outputs.audio == nil && duration == nil {
@@ -763,7 +773,7 @@ struct Hark: ParsableCommand {
     private func runSourceAttributedLive(
         outputs: ResolvedOutputs, settings: ResolvedSettings, captureEngine: CaptureEngine,
         session: CaptureSession, format: PCMFormat, mixedSinks: [AudioSink], labels: SpeakerLabels,
-        systemDiarizer: EENDStreamingDiarizer?
+        systemDiarizer: EENDStreamingDiarizer?, transcriptLog: TranscriptLog? = nil
     ) throws {
         guard let transcriptDest = outputs.transcript else {
             throw HarkError.usage("""
@@ -787,13 +797,13 @@ struct Hark: ParsableCommand {
             language: settings.language, translate: settings.translate,
             captureFormat: format, silenceThresholdDBFS: settings.silenceThreshold,
             useVad: settings.useVad, vadThreshold: settings.vadThreshold, useGain: settings.useGain,
-            screenEcho: echoToScreen)
+            screenEcho: echoToScreen, transcriptLog: transcriptLog)
         let systemTranscriber = LiveTranscriber(
             sharedWriter: writer, sharedBackend: backend, speaker: labels.others,
             resolver: systemDiarizer, language: settings.language, translate: settings.translate,
             captureFormat: format, silenceThresholdDBFS: settings.silenceThreshold,
             useVad: settings.useVad, vadThreshold: settings.vadThreshold, useGain: settings.useGain,
-            screenEcho: echoToScreen)
+            screenEcho: echoToScreen, transcriptLog: transcriptLog)
 
         let othersDesc = systemDiarizer != nil ? "Speaker N" : labels.others
         if outputs.audio == nil && duration == nil {
@@ -826,7 +836,7 @@ struct Hark: ParsableCommand {
     private func runSingleDiarizedLive(
         outputs: ResolvedOutputs, settings: ResolvedSettings, captureEngine: CaptureEngine,
         session: CaptureSession, format: PCMFormat, mixedSinks: [AudioSink],
-        diarizer: EENDStreamingDiarizer?
+        diarizer: EENDStreamingDiarizer?, transcriptLog: TranscriptLog? = nil
     ) throws {
         guard let transcriptDest = outputs.transcript else {
             throw HarkError.usage(
@@ -845,7 +855,7 @@ struct Hark: ParsableCommand {
             labelName: "live transcript [Speaker N]", resolver: diarizer,
             useVad: settings.useVad, vadThreshold: settings.vadThreshold, useGain: settings.useGain,
             // Interactive: echo captions to the screen too (PRD §6.9).
-            screenEcho: interactive && transcriptDest.isFile)
+            screenEcho: interactive && transcriptDest.isFile, transcriptLog: transcriptLog)
 
         if outputs.audio == nil && duration == nil {
             Log.notice("listening (speakers: Speaker N) — press Ctrl+C to stop")

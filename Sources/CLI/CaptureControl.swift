@@ -12,6 +12,7 @@ import Foundation
 final class CaptureControl: @unchecked Sendable {
     private let lock = NSLock()
     private var paused = false
+    private var muted = false
     private var stopped = false
     private var onStop: (() -> Void)?
 
@@ -19,6 +20,15 @@ final class CaptureControl: @unchecked Sendable {
     var isPaused: Bool {
         lock.lock(); defer { lock.unlock() }
         return paused
+    }
+
+    /// True while the microphone is muted (interactive `m`, PRD §6.9). Unlike
+    /// pause this silences **only** the mic — capture keeps running and the
+    /// timeline is preserved — so it is read by the capture session, not the
+    /// engine's chunk-drop path. Independent of `paused`.
+    var isMuted: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return muted
     }
 
     /// True once `stop()` has been requested.
@@ -45,6 +55,16 @@ final class CaptureControl: @unchecked Sendable {
         guard !stopped else { return paused }
         paused.toggle()
         return paused
+    }
+
+    /// Toggles microphone mute; returns the new muted state. A no-op (returns
+    /// the current state) once stopped. Independent of pause.
+    @discardableResult
+    func toggleMute() -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        guard !stopped else { return muted }
+        muted.toggle()
+        return muted
     }
 
     /// Pauses if running; returns true if the state changed.
@@ -74,6 +94,7 @@ final class CaptureControl: @unchecked Sendable {
         } else {
             stopped = true
             paused = false
+            muted = false
             handler = onStop
         }
         lock.unlock()

@@ -86,6 +86,131 @@ struct CaptureControlTests {
         control.setStopHandler { fired = true }  // installed late
         #expect(fired)
     }
+
+    @Test func toggleMuteFlipsStateIndependentlyOfPause() {
+        let control = CaptureControl()
+        #expect(!control.isMuted)
+        #expect(control.toggleMute())   // -> muted
+        #expect(control.isMuted)
+        // Pause is independent of mute.
+        #expect(control.togglePause())  // -> paused
+        #expect(control.isPaused)
+        #expect(control.isMuted)        // still muted
+        #expect(!control.toggleMute())  // -> unmuted
+        #expect(!control.isMuted)
+        #expect(control.isPaused)       // pause unaffected
+    }
+
+    @Test func stopClearsMute() {
+        let control = CaptureControl()
+        _ = control.toggleMute()
+        control.stop()
+        #expect(!control.isMuted)            // stop clears mute
+        #expect(!control.toggleMute())       // no-op after stop
+    }
+}
+
+/// Records the last text written, for testing the yank key without touching the
+/// real system clipboard.
+final class FakeClipboard: ClipboardWriter, @unchecked Sendable {
+    private let lock = NSLock()
+    private(set) var copied: [String] = []
+    var succeed = true
+
+    @discardableResult
+    func copy(_ text: String) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        guard succeed else { return false }
+        copied.append(text)
+        return true
+    }
+}
+
+@Suite("Transcript log (interactive yank)")
+struct TranscriptLogTests {
+    @Test func accumulatesLinesInOrder() {
+        let log = TranscriptLog()
+        #expect(log.isEmpty)
+        log.append("You: hello")
+        log.append("Others: hi there")
+        #expect(!log.isEmpty)
+        #expect(log.count == 2)
+        #expect(log.text == "You: hello\nOthers: hi there")
+    }
+}
+
+@Suite("Interactive key handling (PRD §6.9)")
+struct InteractiveKeyTests {
+    private func session(
+        control: CaptureControl, hasMic: Bool, log: TranscriptLog?, clipboard: ClipboardWriter
+    ) -> InteractiveSession {
+        InteractiveSession(control: control, hasMic: hasMic, transcriptLog: log, clipboard: clipboard)
+    }
+
+    @Test func spaceTogglesPause() {
+        let control = CaptureControl()
+        let ui = session(control: control, hasMic: true, log: nil, clipboard: FakeClipboard())
+        #expect(!ui.handleKey(0x20))
+        #expect(control.isPaused)
+        #expect(!ui.handleKey(0x20))
+        #expect(!control.isPaused)
+    }
+
+    @Test func enterStopsAndSignalsFinish() {
+        let control = CaptureControl()
+        let ui = session(control: control, hasMic: true, log: nil, clipboard: FakeClipboard())
+        #expect(ui.handleKey(0x0A))  // returns true -> reader loop ends
+        #expect(control.isStopped)
+    }
+
+    @Test func mTogglesMuteWhenMicPresent() {
+        let control = CaptureControl()
+        let ui = session(control: control, hasMic: true, log: nil, clipboard: FakeClipboard())
+        #expect(!ui.handleKey(0x6D))  // m
+        #expect(control.isMuted)
+        #expect(!ui.handleKey(0x4D))  // M
+        #expect(!control.isMuted)
+    }
+
+    @Test func mIsNoOpWithoutMic() {
+        let control = CaptureControl()
+        let ui = session(control: control, hasMic: false, log: nil, clipboard: FakeClipboard())
+        #expect(!ui.handleKey(0x6D))
+        #expect(!control.isMuted)  // no mic -> unchanged
+    }
+
+    @Test func yCopiesTranscriptWhenPresent() {
+        let control = CaptureControl()
+        let log = TranscriptLog()
+        log.append("You: hello")
+        log.append("Others: world")
+        let clip = FakeClipboard()
+        let ui = session(control: control, hasMic: true, log: log, clipboard: clip)
+        #expect(!ui.handleKey(0x79))  // y
+        #expect(clip.copied == ["You: hello\nOthers: world"])
+    }
+
+    @Test func yWithEmptyLogDoesNotCopy() {
+        let control = CaptureControl()
+        let clip = FakeClipboard()
+        let ui = session(control: control, hasMic: true, log: TranscriptLog(), clipboard: clip)
+        #expect(!ui.handleKey(0x59))  // Y
+        #expect(clip.copied.isEmpty)
+    }
+}
+
+@Suite("Interactive controls hint")
+struct InteractiveHintTests {
+    @Test func showsMuteHintOnlyWithMic() {
+        let withMic = InteractiveSession.controlsHint(hasMic: true)
+        #expect(withMic.contains("[m] mute mic"))
+        #expect(withMic.contains("[y] yank transcript"))
+        #expect(withMic.contains("[space] pause/resume"))
+
+        let noMic = InteractiveSession.controlsHint(hasMic: false)
+        #expect(!noMic.contains("[m]"))
+        #expect(noMic.contains("[y] yank transcript"))  // yank always available
+    }
 }
 
 @Suite("Interactive output resolution")

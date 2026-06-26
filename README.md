@@ -1,30 +1,72 @@
-# hark
+<p align="center">
+  <img src="assets/banner.svg" alt="hark — capture and transcribe macOS audio from a single native CLI" width="760">
+</p>
 
-Capture audio and produce transcripts on macOS, from a single native Swift
-binary. `hark` is the verb — "listen and transcribe": it takes one input
-(your microphone by default, or system/per-app audio, or an existing file) and
-writes the outputs you name (an audio file, a transcript, or a stream on
-stdout). It is built for Unix-style pipelines and unattended use.
+<p align="center">
+  <a href="https://github.com/PhantomYdn/hark/actions/workflows/ci.yml"><img src="https://github.com/PhantomYdn/hark/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/PhantomYdn/hark/releases"><img src="https://img.shields.io/github/v/release/PhantomYdn/hark?sort=semver&color=3B82F6" alt="Latest release"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"></a>
+  <img src="https://img.shields.io/badge/macOS-14.4%2B-black?logo=apple" alt="macOS 14.4+">
+  <img src="https://img.shields.io/badge/Swift-6-orange?logo=swift&logoColor=white" alt="Swift 6">
+  <a href="https://github.com/PhantomYdn/hark/releases"><img src="https://img.shields.io/github/downloads/PhantomYdn/hark/total?color=2DD4BF" alt="Downloads"></a>
+</p>
 
-> Status: pre-1.0 beta. Core capture, transcoding, and transcription work;
-> packaging (signing, Homebrew) is in progress. See [PLAN.md](PLAN.md).
+<p align="center">
+  <img src="assets/demo.gif" alt="hark in action: list devices, transcribe a file, transcode, show config" width="820">
+</p>
 
-## Features
+**`hark`** is the verb — *"listen and transcribe."* It captures your microphone,
+all system audio, or specific apps on macOS, and turns it into a transcript —
+from a single native Swift binary with no drivers, no Electron, and no network
+calls by default. It is built for the terminal: one input, the outputs you name,
+and clean stdout/stdin streaming for Unix-style pipelines.
 
-- **Capture** the microphone, **all system audio** (`--system`), **specific
-  apps** (`--app`), or **everything except** some apps (`--exclude-app`) via
-  Core Audio process taps — and optionally **mix in the mic** (`--mix`).
-- **Transcribe** with a selectable engine: `whisper` (local whisper.cpp,
-  multilingual + translate) or `apple` (native on-device Speech.framework, no
-  dependencies). Near-runtime live transcription segments the stream and emits
-  text as you speak.
-- **Formats**: write `.wav`, `.m4a`, `.flac`, `.mp3`, `.opus` audio and `.txt`, `.srt`, `.json`
-  transcripts; **transcode** between formats (`hark -i in -a out`); **split**
-  into chunks by duration or silence.
-- **Streaming**: `-a -` writes a WAV (or raw PCM) stream to stdout; transcripts
-  go to stdout by default — both compose with `ffmpeg`, `sox`, and friends.
-- **Config & environment**: persistent defaults in `~/.hark/config.json` plus
-  `$HARK_*` overrides.
+```sh
+hark                                        # live mic → transcript on stdout
+hark --system --mix -a meeting.m4a -t meeting.srt   # record a call, keep audio + subtitles
+hark -i recording.m4a                       # transcribe a file
+```
+
+> [!NOTE]
+> **Status: pre-1.0 beta.** Core capture, transcoding, and transcription work;
+> packaging polish is ongoing. See [PLAN.md](PLAN.md) and [CHANGELOG.md](CHANGELOG.md).
+
+## Why hark
+
+- **One native binary.** Pure Swift + Core Audio. No BlackHole, no virtual
+  devices, no background apps — `brew install` and go.
+- **Capture anything.** The microphone, **all system audio** (`--system`),
+  **specific apps** (`--app`), or **everything except** some apps
+  (`--exclude-app`) — and optionally **mix in your mic** (`--mix`) for meetings.
+- **Live transcription.** Text streams as you speak, with a choice of engines:
+  local `whisper.cpp`, on-device Apple Speech, WhisperKit, or Parakeet.
+- **Know who spoke.** `--speakers` labels turns by source (`You`/`Others`) and by
+  voice (`Speaker 1..N`) using on-device CoreML — no cloud.
+- **Private by default.** Everything runs on-device; no telemetry, no network
+  calls unless you download a model.
+- **Built for pipelines.** `-a -` streams WAV to stdout, transcripts go to
+  stdout, diagnostics to stderr — composes with `ffmpeg`, `sox`, and friends.
+- **Unattended-ready.** Auto-recovers from screen lock / sleep / device changes,
+  `--keep-awake`, durations, splitting, and a remote-control HTTP agent.
+
+## Contents
+
+- [Requirements](#requirements)
+- [Install](#install)
+- [Quick start](#quick-start)
+- [Usage](#usage)
+- [Transcription engines](#transcription-engines)
+- [Speaker labels](#speaker-labels)
+- [Interactive mode](#interactive-mode)
+- [Remote control](#remote-control)
+- [Models](#models)
+- [Configuration](#configuration)
+- [Permissions](#permissions)
+- [Pipelines](#pipelines)
+- [Recipes](#recipes)
+- [Development](#development)
+- [Project documents](#project-documents)
+- [License](#license)
 
 ## Requirements
 
@@ -66,14 +108,10 @@ cp .build/release/hark /usr/local/bin/hark
 The arm64 binary is also attached to each
 [GitHub Release](https://github.com/PhantomYdn/hark/releases). It is **signed
 (Developer ID) and notarized**, so it passes Gatekeeper on download — no `xattr`
-workaround needed.
+workaround needed. The stable signature also means privacy grants persist across
+upgrades instead of resetting on each new binary.
 
-The stable signature also means privacy grants (microphone / system-audio /
-speech) persist across upgrades instead of resetting on each new binary. Note
-that for a CLI launched from a shell, macOS may still show the permission prompt
-under the **terminal** that runs `hark` — see [Permissions](#permissions).
-
-Install a transcription engine and model:
+Then install a transcription engine and model:
 
 ```sh
 brew install whisper-cpp                 # the default 'whisper' engine
@@ -97,60 +135,53 @@ hark --engine apple                   # transcribe live with on-device Apple spe
 `hark` takes **one input** and writes the **outputs you name**; naming no
 output transcribes to stdout.
 
-**Input — pick one** (default: system default microphone):
+| | Pick one input | Name the outputs |
+|---|---|---|
+| **default** | system default microphone | transcript on stdout |
+| **flags** | `-d` device · `--system` · `--app` · `--exclude-app` · `--mix` · `-i` file/stdin | `-a` audio · `-t` transcript (`-` = stdout) |
 
-| Flag | Source |
-|------|--------|
-| *(none)* | live capture from the default input device |
-| `-d, --device UID` | live capture from a specific input device (`hark devices`) |
-| `--system` | all system audio via a process tap |
-| `--app ID` | a specific app (bundle ID or PID; repeatable) |
-| `--exclude-app ID` | all system audio except the listed app(s) (repeatable) |
-| `--mix` | additionally mix the microphone into a system/app capture |
-| `--capture-backend auto\|sckit\|coreaudio` | system/app capture backend (default `auto`; or `$HARK_CAPTURE`) |
-| `-i, --input PATH\|-` | read an existing file, or `-` for stdin (no live capture) |
+```sh
+hark --app com.apple.Music -a song.m4a       # capture one app
+hark --system --exclude-app com.zoom.xos -t -  # everything but Zoom → stdout
+hark -i talk.wav -a talk.mp3 -t talk.srt      # transcode + subtitle a file
+hark --duration 30 --split silence=2 -a memo.wav  # split on 2s of silence
+```
 
-**Output — name what to keep; `-` means stdout** (at most one output may be `-`):
+<details>
+<summary><b>Full flag, environment & config reference →</b></summary>
 
-| Flag | Output |
-|------|--------|
-| `-a, --audio PATH\|-` | audio file (`.wav`/`.m4a`/`.flac`/`.mp3`/`.opus`), or `-` for a WAV stream |
-| `-t, --transcript PATH\|-` | transcript (`.txt`/`.srt`/`.json`), or `-` for text |
-| *(none)* | transcribe to stdout (the default verb) |
-| `--raw` | with `-a -`, stream headerless PCM instead of WAV |
+The complete input/output tables, capture/timing flags, interruption recovery,
+working-directory handling, and the configuration matrix live in
+**[docs/reference.md](docs/reference.md)**. Run `hark --help` for the canonical
+list and `hark help <subcommand>` for a subcommand's options.
 
-**Capture / timing**: `-r/--rate`, `-b/--bits` (16/24/32), `-c/--channels`
-(1/2), `--duration SEC`, `--split duration=SEC` / `--split silence=SEC`
-(with `--silence-threshold dBFS`), `--keep-awake` to stop the system sleeping
-mid-recording (also the display in `--interactive`; off by default, or
-`$HARK_KEEP_AWAKE` / config `keep-awake`).
+</details>
 
-**Interruptions**: capture auto-recovers from a screen lock, display/system
-sleep, or device change — the stream is restarted and recording resumes
-(tunable via `$HARK_STALL_SECONDS`, `$HARK_RECOVER_TIMEOUT`; disable with
-`$HARK_NO_RECOVER`). Pair with `--keep-awake` to avoid idle sleep entirely.
+## Transcription engines
 
-**Working directory**: `-C, --directory PATH` resolves **relative** artifact
-paths (`-i`, `-a`, `-t`, and `--split` outputs) against `PATH` (absolute paths
-and `-` are unaffected). Defaults to the current directory; also
-`$HARK_DIRECTORY` or config `directory`. The directory must already exist.
+Select with `-e/--engine` (default `whisper`). All engines accept any readable
+input; it is normalized to 16 kHz mono internally.
 
-**Transcription**: `-e/--engine`, `--model` (engine-specific — see
-[Models](#models)), `--language` (`auto`, or a code; support varies by engine),
-`--translate` / `--no-translate`, `--transcript-format txt|srt|json`.
+| Engine | Runtime | Languages | Auto-detect | Translate→EN | Notes |
+|--------|---------|-----------|-------------|--------------|-------|
+| `whisper` (default) | whisper.cpp binary | ~99 | yes (`--language auto`) | yes | needs a non-`.en` model for non-English |
+| `apple` | native `Speech.framework` (no deps) | ~50 locales | no (uses the locale) | no | on-device; plain-text only in batch |
+| `whisperkit` | WhisperKit CoreML | ~99 | yes | yes | Apple-Silicon-first; models auto-download |
+| `parakeet` | FluidAudio CoreML | 25 European (v3) / English (v2) | yes | no | Apple-Silicon-first; `--model v2`/`v3` |
+| `cloud` | post-MVP | — | — | — | — |
 
-**Quiet captures**: live transcription covers the whole timeline — an on-device
-VAD (Apple Silicon) only picks clean cut points, and speech the VAD doesn't flag
-(quiet or overlapping, e.g. remote participants over a room mic) is still
-transcribed rather than dropped; only true silence is skipped. `--vad-threshold`
-(0–1, default `0.5`) tunes where turns are cut. Segments are also peak-normalized
-before the engine to improve recognition of low-level audio (the recording is
-unaffected; disable with `HARK_GAIN=off`).
+- `whisper` is found on `PATH` (`whisper-cli`/`whisper-cpp`, and `whisper-server`
+  for resident live transcription) or via `$HARK_WHISPER_BIN` /
+  `$HARK_WHISPER_SERVER_BIN`. Disable the server with `$HARK_WHISPER_SERVER=0`.
+- `apple` needs the Speech Recognition permission and runs entirely on-device.
+  Batch transcription writes plain text; for `.srt`/`.json` from a file, use
+  another engine. Live `.srt`/`.json` works with any engine.
+- `whisperkit` and `parakeet` are CoreML engines (Apple Silicon only). They
+  download their models from Hugging Face on first use, then run fully on-device.
+  `parakeet` auto-detects its language (`--language` is ignored) and cannot
+  translate.
 
-Run `hark --help` for the full list, and `hark help <subcommand>` for a
-subcommand's options.
-
-### Speaker labels
+## Speaker labels
 
 `--speakers` (alias `--diarize`) labels each transcript segment with who spoke,
 two ways that combine:
@@ -161,78 +192,57 @@ two ways that combine:
 - **Acoustic diarization** — distinct voices within a stream are separated into
   **`Speaker 1`, `Speaker 2`, …** using on-device CoreML models (Apple Silicon).
 
-By default a meeting is labeled **`You` + `Speaker 1..N`** (your mic, plus each
-remote participant). Use `--speaker-mode source` for the cheap `You`/`Others`
-split with no diarization.
-
-| Flag | Meaning |
-|------|---------|
-| `--speakers`, `--diarize` | enable speaker labels (off by default) |
-| `--speaker-mode auto\|source\|acoustic` | `auto` (default): source + diarization; `source`: You/Others only; `acoustic`: diarize one stream |
-| `--diarize-engine auto\|streaming\|offline` | `auto` (default): streaming live / offline batch; `streaming`: real-time; `offline`: accurate, diarized at end of capture |
-| `--max-speakers N` | cap the number of distinct speakers |
-| `--speaker-threshold 0..1` | clustering sensitivity (default ~0.7; lower splits more, higher merges) |
-| `--speaker-labels "You,Others"` | rename the source labels |
+By default a meeting is labeled **`You` + `Speaker 1..N`**. Use
+`--speaker-mode source` for the cheap `You`/`Others` split with no diarization.
 
 ```sh
 # Live meeting: You + Speaker 1/2/… in real time
 hark --system --mix --speakers -t meeting.srt
 
-# Same, but an accurate offline pass (transcript written when you stop)
+# Accurate offline pass (transcript written when you stop)
 hark --system --mix --speakers --diarize-engine offline -t meeting.srt
-
-# Cheap deterministic You/Others (no diarization model)
-hark --system --mix --speakers --speaker-mode source -t -
 
 # Diarize a recording (everyone becomes Speaker N — "You" is live-only)
 hark -i meeting.wav --speakers -t out.json
-
-# Tune sensitivity if speakers merge or over-split
-hark -i meeting.wav --speakers --speaker-threshold 0.55 --max-speakers 6 -t out.srt
 ```
 
 The label appears per format: txt `Speaker 1: …`, srt `[Speaker 1] …`, json a
 `"speaker"` field. **Acoustic diarization is Apple-Silicon-only** (on Intel,
 diarized modes fall back to `You`/`Others`); the first use downloads a CoreML
-model — pre-fetch with `hark models download fluidaudio:diarizer`. Live
-segmentation also uses an on-device VAD model (Apple Silicon); disable it with
-`HARK_VAD=0`.
+model — pre-fetch with `hark models download fluidaudio:diarizer`. See the
+[full flag table](docs/reference.md#speaker-labels) for `--speaker-mode`,
+`--diarize-engine`, `--max-speakers`, `--speaker-threshold`, and
+`--speaker-labels`.
 
-### Interactive mode
+## Interactive mode
 
 `--interactive` runs a live capture in a minimal terminal UI: the transcript
 streams to the terminal, a startup status line shows the resolved
 engine/source/format, and single keys control the session:
 
-- **space** — pause / resume (the paused interval is **not** recorded, so the
-  output is shorter than wall-clock)
+- **space** — pause / resume (the paused interval is **not** recorded)
+- **m** — mute / unmute the microphone (shown only when a mic is in the capture;
+  only the mic is silenced — system audio keeps recording and the timeline is
+  preserved)
+- **y** — yank: copy the transcript captured so far to the clipboard (local only)
 - **Enter** — finish and finalise the file (Ctrl-C also stops)
 
 ```sh
-# Interactive meeting capture: watch the transcript, pause during a break
-hark --interactive --system --mix -a meeting.m4a
-
-# Same, but also persist the transcript — captions show on screen *and* go to
-# the file at the same time
-hark --interactive --system --mix -a meeting.m4a -t meeting.txt
+hark --interactive --system --mix -a meeting.m4a            # watch the transcript live
+hark --interactive --system --mix -a meeting.m4a -t meeting.txt  # …and persist it
 ```
 
-The live transcript is always shown on screen; naming `-t FILE`/`-a FILE`
-concurrently saves the transcript/audio. Interactive mode needs a real terminal
-(stdin + stdout are a TTY) and can't be combined with `-i` or stdout output
-(`-a -`/`-t -`).
+Interactive mode needs a real terminal (stdin + stdout are a TTY) and can't be
+combined with `-i` or stdout output (`-a -`/`-t -`).
 
-### Remote control
+## Remote control
 
-`hark --remote-control [host:]port` runs Hark as a control **agent** instead
-of capturing on launch, serving a small HTTP/JSON API so scripts (or a browser
-userscript) can start/pause/resume/stop/query a recording. One recording at a
-time; the API is control + status only (artifacts are written to files, never
-returned over HTTP).
+`hark --remote-control [host:]port` runs Hark as a control **agent** instead of
+capturing on launch, serving a small HTTP/JSON API so scripts (or a browser
+userscript) can start/pause/resume/stop/query a recording.
 
 ```sh
-# Loopback agent (conventional port 8473), recordings under ~/Recordings
-hark --remote-control 8473 -C ~/Recordings
+hark --remote-control 8473 -C ~/Recordings   # loopback agent, recordings under ~/Recordings
 
 curl -s -X POST http://127.0.0.1:8473/start \
   -d '{"system":true,"mix":true,"audio":"call.m4a","transcript":"call.srt"}'
@@ -241,44 +251,8 @@ curl -s -X POST http://127.0.0.1:8473/stop
 ```
 
 Bound to loopback by default; a non-loopback bind requires `$HARK_REMOTE_TOKEN`.
-Launch-time capture flags become per-session defaults. Full API reference and a
-Tampermonkey Google-Meet auto-record userscript:
+Full API reference and a Tampermonkey Google-Meet auto-record userscript:
 [docs/remote-control.md](docs/remote-control.md).
-
-### Subcommands
-
-```sh
-hark devices [--list-inputs|--list-outputs] [--json]   # enumerate audio devices
-hark apps [--json]                                     # list capturable applications
-hark info <file> [--json]                              # duration/format/metadata
-hark models list [--available] [--json]                # local or downloadable models
-hark models download <name> [--default] [--force]      # fetch a ggml model
-hark config show|set <key> <value>|unset <key>|path    # persisted defaults
-```
-
-## Transcription engines
-
-Select with `-e/--engine` (default `whisper`). All engines accept any readable
-input; it is normalized to 16 kHz mono internally.
-
-| Engine | Runtime | Languages | Auto-detect | Translate→EN | Notes |
-|--------|---------|-----------|-------------|--------------|-------|
-| `whisper` (default) | whisper.cpp binary (`whisper-cli`/`whisper-server`) | ~99 | yes (`--language auto`) | yes | needs a non-`.en` model for non-English |
-| `apple` | native `Speech.framework` (no deps) | ~50 locales | no (uses the locale) | no | on-device; plain-text only in batch |
-| `whisperkit` | WhisperKit CoreML | ~99 | yes | yes | Apple-Silicon-first; models auto-download |
-| `parakeet` | FluidAudio CoreML | 25 European (v3) / English (v2) | yes | no | Apple-Silicon-first; `--model v2`/`v3` |
-| `cloud` | post-MVP | — | — | — | — |
-
-- `whisper` is found on `PATH` (`whisper-cli`/`whisper-cpp`, and
-  `whisper-server` for resident live transcription) or via `$HARK_WHISPER_BIN`
-  / `$HARK_WHISPER_SERVER_BIN`. Disable the server with `$HARK_WHISPER_SERVER=0`.
-- `apple` needs the Speech Recognition permission and runs entirely on-device
-  (no network). Batch transcription writes plain text; for `.srt`/`.json` from a
-  file, use another engine. Live `.srt`/`.json` works with any engine.
-- `whisperkit` and `parakeet` are CoreML engines (Apple Silicon only). They
-  download their models from Hugging Face on first use, then run fully
-  on-device. `parakeet` auto-detects its language (`--language` is ignored) and
-  cannot translate.
 
 ## Models
 
@@ -294,67 +268,34 @@ hark models download large-v3-turbo            # whisper ggml
 hark models download whisperkit:large-v3-v20240930_626MB
 hark models download parakeet:v3               # or parakeet:v2 (English-only)
 hark models download fluidaudio:diarizer       # speaker diarization (--speakers)
-hark models download fluidaudio:vad            # live-segmentation VAD
 ```
 
 The first whisper model you download becomes the default. `--default` makes any
-model the default; for whisperkit/parakeet it also sets the engine (e.g.
-`hark models download parakeet:v3 --default` ⇒ `engine=parakeet`). CoreML
-engines also auto-download on first use, so an explicit download is optional.
+model the default; for whisperkit/parakeet it also sets the engine.
 
-## Configuration & environment
+## Configuration
 
 Most defaults resolve **flag › environment (`$HARK_*`) › config
-(`~/.hark/config.json`) › built-in**:
-
-Every setting has a flag, a `$HARK_*` env var, and a config key. The env var
-is `HARK_<KEY>` (uppercased, `-`→`_`) except `model` (`$HARK_WHISPER_MODEL`)
-and `capture-backend` (`$HARK_CAPTURE`).
-
-| Config key | Flag | Default |
-|------------|------|---------|
-| `engine` | `-e/--engine` | `whisper` |
-| `model` | `--model` | (required for whisper) |
-| `language` | `--language` | `auto` |
-| `translate` | `--translate`/`--no-translate` | `false` |
-| `device` | `-d/--device` | system default |
-| `directory` | `-C/--directory` | current directory |
-| `capture-backend` | `--capture-backend` | `auto` |
-| `rate` / `bits` / `channels` | `-r` / `-b` / `-c` | live `44100`/`16`; convert = source |
-| `keep-awake` | `--keep-awake`/`--no-keep-awake` | `false` |
-| `silence-threshold` | `--silence-threshold` | `-50` |
-| `vad` | `--vad`/`--no-vad` | `true` |
-| `vad-threshold` | `--vad-threshold` | `0.5` |
-| `gain` | `--gain`/`--no-gain` | `true` |
-| `speakers` | `--speakers`/`--no-speakers` | `false` |
-| `speaker-mode` | `--speaker-mode` | `auto` |
-| `speaker-labels` | `--speaker-labels` | `You,Others` |
-| `diarize-engine` | `--diarize-engine` | `auto` |
-| `max-speakers` | `--max-speakers` | (unset) |
-| `speaker-threshold` | `--speaker-threshold` | (engine default) |
+(`~/.hark/config.json`) › built-in**. Every setting has a flag, a `$HARK_*` env
+var, and a config key.
 
 ```sh
 hark config set engine apple
-hark config set silence-threshold -40   # values starting with '-' are taken verbatim
 hark config set speaker-mode source
 hark config show                        # every setting, its value, and its SOURCE
+hark config path                        # where the JSON file lives
 ```
 
-`hark config show` lists **all** settings with their effective value and a
-`SOURCE` column — `default` (built-in), `config` (set in the file), or `env`
-(an `$HARK_*` override, which outranks config). `--json` emits
-`{ "<key>": { "value": …, "source": … } }`.
-
-The config file is plain JSON and hand-editable; `hark config path` prints its
-location.
+The config file is plain JSON and hand-editable. The complete settings matrix
+(every key, flag, env var, and default) is in
+**[docs/reference.md](docs/reference.md#configuration--environment)**.
 
 ## Permissions
 
 macOS gates microphone, system-audio, and speech recognition behind TCC. The
 release binary is signed and notarized, so grants persist across upgrades; for a
 shell-launched CLI, macOS may still attribute these prompts to the **terminal**
-that launches `hark`. See [docs/permissions.md](docs/permissions.md) for the
-exact System Settings paths, the system-audio "+" flow, and notes for tmux/screen.
+that launches `hark`.
 
 System/app capture has two backends, selected by `--capture-backend` (default
 `auto`, or `$HARK_CAPTURE`):
@@ -362,29 +303,23 @@ System/app capture has two backends, selected by `--capture-backend` (default
 - **`coreaudio`** — Core Audio process tap. Needs the narrower **System Audio
   Recording** permission and works headless (cron/launchd/SSH), macOS 14.4+.
 - **`sckit`** — ScreenCaptureKit (`SCStream`, macOS 15+). Needs the broader
-  **Screen Recording** permission and a graphical login session (not headless).
-  It delivers audio continuously, so `--mix` keeps recording the mic while
-  system audio is idle.
+  **Screen Recording** permission and a graphical login session.
 
-`auto` prefers `sckit` when it can run (macOS 15+, Screen Recording already
-granted, a display present) and otherwise falls back to `coreaudio`.
+See [docs/permissions.md](docs/permissions.md) for the exact System Settings
+paths, the system-audio "+" flow, and notes for tmux/screen.
 
 ## Pipelines
 
 ```sh
-# Stream live WAV into ffmpeg
-hark -a - --duration 10 | ffmpeg -i - out.mp3
-
-# Record on one machine, transcribe on another
-hark -a - | hark -i -
-
-# Follow a live transcript as it is written
-hark -t notes.txt --system & tail -f notes.txt
+hark -a - --duration 10 | ffmpeg -i - out.mp3   # stream live WAV into ffmpeg
+hark -a - | hark -i -                            # record on one machine, transcribe on another
+hark -t notes.txt --system & tail -f notes.txt   # follow a live transcript
 ```
 
 `hark` follows POSIX conventions: audio/transcripts on stdout, diagnostics on
 stderr (`-v` for detail), and a non-zero engine exit code propagates through the
-pipeline. SIGINT/SIGTERM finalize the current file so it stays playable.
+pipeline. SIGINT/SIGTERM finalize the current file so it stays playable. See the
+[exit codes](docs/reference.md#exit-codes) table for the `sysexits(3)` mapping.
 
 ## Recipes
 
@@ -393,35 +328,30 @@ Copy-and-adapt `zsh` wrappers for common workflows live in
 audio + transcript, then a fabric-ai summary), `hark-note` (quick voice memo),
 and `hark-dictate` (speak → clipboard). See [examples/README.md](examples/README.md).
 
-## Exit codes
-
-Following BSD `sysexits(3)` where applicable:
-
-| Code | Meaning |
-|------|---------|
-| 0 | success |
-| 1 | generic failure |
-| 64 | usage / invalid arguments |
-| 66 | input file or device not found |
-| 69 | feature/engine unavailable or not implemented |
-| 70 | internal error |
-| 74 | I/O error |
-| 77 | permission denied (microphone / system audio / speech) |
-
 ## Development
 
 ```sh
 make build      # swift build
 make test       # swift test (with a CLT Testing.framework path workaround)
 make release    # swift build -c release
+make demo       # render the README demo GIF (needs: brew install vhs ffmpeg)
 ```
 
 Modular SwiftPM targets: `DeviceManager`, `TapEngine`, `Encoders`, `CLI`. Many
 integration tests are gated on optional tools (whisper.cpp, a model, `say`,
-Speech authorization) and skip cleanly when absent.
+Speech authorization) and skip cleanly when absent. Contributions welcome — see
+[CONTRIBUTING.md](.github/CONTRIBUTING.md).
 
 ## Project documents
 
 - [PRD.md](PRD.md) — product requirements
 - [PLAN.md](PLAN.md) — phased implementation plan and status
+- [docs/reference.md](docs/reference.md) — full flag, environment & config reference
 - [docs/permissions.md](docs/permissions.md) — TCC permission setup
+- [docs/remote-control.md](docs/remote-control.md) — remote-control HTTP API
+- [CHANGELOG.md](CHANGELOG.md) — release notes
+
+## License
+
+[MIT](LICENSE) © Ilya Naryzhnyy. Bundled third-party components are listed in
+[NOTICES](NOTICES); MP3 output uses libmp3lame (LGPL-2.1).

@@ -6,11 +6,6 @@
 
 > Unscheduled items. Add new work here; `/plan` will triage on next run.
 
-- [ ] Interactive: always render the live transcript on screen (stdout) **and** concurrently persist it when `-t FILE` is named (bug fix to match PRD §6.9 line 396, which already specifies this). Today `-t FILE` routes the transcript only to the file, leaving the interactive UI without captions. Add an injectable screen-echo to `LiveTranscriber` (plain text per finalised segment, with speaker label when set), enabled from the live paths when `interactive && transcript→file`. Covers the plain, source-attributed (`--speakers`), and single-diarized live paths. Tests inject a pipe and assert file-writer + screen both receive segments.
-- [ ] `examples/` adoptable zsh recipes wrapping `hark` (copy-and-adapt, not installed): `hark-meeting "name"` (interactive `--system --mix --speakers` → `<date>-name.{mp3,txt}`, then `fabric-ai -p summarize_meeting` → `.md`), `hark-note` (quick mic memo → audio + transcript), `hark-dictate` (mic → clipboard via `pbcopy`). `examples/README.md` indexes them with prerequisites (hark, fabric-ai, system-audio TCC → docs/permissions.md); add a pointer from README.md.
-- [ ] Downloading require time. If hark has been started for listening: but it needs to download something - it should be clearly stated for user - otherwise delay might flustrate users
-- [ ] Dedicated `PhantomYdn/homebrew-hark` tap repo (formula-only) so `brew tap` doesn't clone the whole project tree (a tap is a full `git clone`); needs a cross-repo push token for the release workflow's formula auto-bump (the default `GITHUB_TOKEN` can't push to another repo).
-
 ## Phase 1: Project Foundation & Core Capture (PRD M1)
 
 - [x] Initialize git repository with `.gitignore` for Swift/SwiftPM
@@ -165,6 +160,7 @@
 - [x] Write README: install, TCC permission setup, usage examples, engines, config/env precedence, exit codes (`README.md`)
 - [x] Add `LICENSE` (MIT) and expand `NOTICES` with the statically-linked SwiftPM deps (Apache-2.0/MIT) alongside the vendored LGPL LAME; `CHANGELOG.md` for v0.1.0
 - [x] Provide example scripts: `examples/hark-meeting` (interactive system+mic → audio + transcript → fabric-ai summary), `hark-note`, `hark-dictate` (cron/launchd recipe deferred to the daemon work — see Future)
+- [x] `examples/README.md` indexes the recipes (table + Install + Prerequisites incl. system-audio TCC → docs/permissions.md) and `README.md` links to it; `hark-meeting` = interactive `--system --mix --speakers` → `<date>-slug.{mp3,txt}` then `fabric-ai -p summarize_meeting` → `.md`; `hark-note` (mic memo), `hark-dictate` (mic → `pbcopy`)
 - [x] Release automation: tag-triggered `.github/workflows/release.yml` builds `swift build -c release`, packages the arm64 binary + man/LICENSE/NOTICES, publishes a GitHub Release, and auto-bumps `Formula/hark.rb` (url+sha256)
 - [x] Homebrew (one-repo tap): `Formula/hark.rb` binary formula (`depends_on whisper-cpp`, arm64); `brew tap PhantomYdn/hark <url> && brew install hark`. Bare `brew install hark` (homebrew-core) deferred — needs notability + a stable release
 - [x] Fill PRD Author field (Ilya Naryzhnyy); acceptance criteria US01–US07 reviewed against the implementation (capture/transcode/engines/diarization/interactive/remote-control all shipped; live-capture e2e steps remain TCC/GUI-gated on the pending-live list)
@@ -176,6 +172,7 @@
 > Tracked here so the beta isn't blocked on them.
 
 - [ ] Submit to homebrew-core for bare `brew install hark` (after notability + a stable, non-beta release)
+- [ ] Dedicated `PhantomYdn/homebrew-hark` formula-only tap repo so `brew tap` doesn't clone the whole project tree; needs a cross-repo push token for the release workflow's formula auto-bump (default `GITHUB_TOKEN` can't push to another repo)
 - [ ] Validate unattended operation from cron/launchd after TCC grant (US05)
 - [ ] Reliability test: 24-hour continuous recording produces valid file on SIGINT/SIGTERM (PRD §7)
 - [ ] Performance validation: < 3% CPU on Apple Silicon at 16 kHz mono; buffering < 100 ms (PRD §7)
@@ -274,6 +271,7 @@
 - [x] **`config show` DESCRIPTION column**: each setting carries a one-sentence `summary` in the registry; `config show` renders it as a fourth column and `--json` gains a `description` field per key
 - [x] Tests: catalog parse (`fluidaudio:` tags + `available()` coverage)
 - [x] Leaf-subcommand `--help`: the broad symptom was a zsh test artifact (an unquoted `$var` holding `"models list"` is passed as one argument, so hark shows root help) — `hark models list --help` etc. work directly (also helped by the argument-parser 1.8.2 bump). The one real case, `hark config set --help`, was swallowed by `.captureForPassthrough` (used for `-40` values); fixed via `ConfigSet.isHelpRequest` → `CleanExit.helpRequest`. Stale man BUGS note removed.
+- [x] First-use download visibility at capture start: every auto-downloading backend prints a default-level `downloading … (first use)` notice before fetching (`ParakeetBackend`, `WhisperKitBackend`, `Diarization`, `EENDDiarizer`, `FluidVadClassifier`); cached loads stay silent. (whisper, the default, doesn't auto-fetch — a missing model gives a clear HF download hint.)
 
 ### Phase 8.7 — Validation & user-facing docs
 
@@ -349,6 +347,7 @@
 - [x] Terminal cbreak mode (termios, VMIN=0/VTIME=1) with guaranteed restore on stop/deinit; single-key reader (**space**=pause/resume, **Enter**=finish; Ctrl-C still stops) — `InteractiveSession.swift`
 - [x] Minimal TTY UI: status header (10.1) on stderr + live transcript on stdout (rendered even without `-t`) + control hints/notices on stderr (no pinned footer, per decision)
 - [x] Tests: `CaptureControl` state machine (pause→resume→stop, idempotent, late stop-handler), `--interactive` accept/reject combos, interactive output resolution (`InteractiveTests`)
+- [x] Interactive screen-echo: when the transcript is persisted to a file, mirror each finalized segment (plain text + speaker label) to the on-screen UI so live captions always show — `LiveTranscriber.screenEcho` wired from the single, source-attributed, and single-diarized live paths (`Hark.swift:694/790/796/848`, `LiveTranscriber.swift:197`)
 - [ ] Live-capture e2e of interactive pause/resume/stop (real mic/system) — on the pending-live list (can't run permission-free)
 
 ### Phase 10.3 — Remote-control agent (§6.10)
@@ -375,6 +374,24 @@
 - [x] Gated steps added to `Scripts/verify-live.sh`: [7] interactive non-TTY guard, [8] remote-control start/409/stop lifecycle (mic-permission → SKIP). Interactive keypress e2e + agent-with-system remain manual (pending-live)
 - [x] Resolve Open Q10 (pause × `--split`): pause drops chunks → gap within the current chunk, no new file; deterministic test `CaptureControlIntegrationTests.pausedAudioIsDropped`
 
+### Phase 10.6 — Interactive mic mute & transcript yank (§6.9, US12)
+
+> Two new single-key controls in the `--interactive` UI: **m** mutes/unmutes the
+> microphone (silences only the mic — timeline preserved, distinct from pause's
+> gap), **y** yanks the full session transcript so far to the system clipboard.
+> Interactive-only; remote-control parity deferred (Future). Builds on the
+> Phase 10.2 capture-control core + `InteractiveSession` key reader.
+
+- [x] `CaptureControl` gains a `muted` flag + `toggleMute()` (independent of pause/stop, cleared on stop); mic mute **zeroes** the mic samples rather than dropping chunks, so the timeline is preserved (mixed `-a` keeps system audio; mic-only records silence)
+- [x] Apply mute at the mic-ingest point via a new `MicMutableCaptureSession` protocol (`micMuted: () -> Bool`): `MicCaptureSession` zeroes its converted PCM; `SystemCaptureSession` switches the main mix to `StreamMixer.systemBuffer` (system-only) and zeroes the `.microphone` source; `ScreenCaptureSession` zeroes the mic before `drainMix` + the `.microphone` tee. `CaptureEngine.run` wires `{ control.isMuted }` for all paths; the system/`.system` path is untouched
+- [x] In-memory transcript accumulator (`TranscriptLog`): every finalized caption (plain text, with speaker label when `--speakers` is active) appends to a shared session buffer fed by the single, source-attributed, and single-diarized `LiveTranscriber`s — independent of `screenEcho`
+- [x] Clipboard writer: `ClipboardWriter` protocol + `SystemClipboard` (NSPasteboard, falling back to `pbcopy`); tests use a fake
+- [x] `InteractiveSession` key handling: **m** → `control.toggleMute()` + stderr notice ("microphone muted/unmuted"); **y** → copy buffer + notice ("transcript copied to clipboard (N lines)"), empty buffer → "nothing to copy yet" (clipboard left unchanged)
+- [x] Controls hint + mic awareness: `hasMic` (mic-only or `--mix`) passed into `InteractiveSession`; the **m** hint shows only when a mic is present; with no mic, pressing **m** prints "no microphone in this capture" and does nothing. **y** is in the hint unconditionally
+- [x] Help/docs: `--interactive` help string + README "Interactive mode" + man page controls list updated with **m**/**y** (mandoc clean); `examples/hark-meeting` header; CHANGELOG Unreleased; yank noted as local-clipboard-only
+- [x] Tests: `CaptureControl` mute toggle (independent of pause; cleared on stop); `TranscriptLog` accumulation; `ClipboardWriter` fake copy + empty-buffer no-op; hint visibility / no-mic notice; `InteractiveSession.handleKey` dispatch for space/m/y/Enter. `make test` green — 281 tests, 74 suites
+- [ ] Live-capture e2e of interactive mute + yank (real mic) — pending-live list (keypress path can't run permission-free; mic-zeroing in the OS sessions can't run without TCC)
+
 ## Future
 
 > Nice-to-have items outside current scope.
@@ -391,3 +408,4 @@
 - [ ] Named speaker identification: voiceprint enrollment + local speaker store (FluidAudio embeddings) (PRD §4.2 / Open Q5)
 - [ ] Overlapping-speech handling / per-word speaker assignment (PRD Open Q6)
 - [ ] Cross-host & authenticated remote control beyond the loopback default (token/TLS, allow-lists) (PRD §4.2 / Open Q9 — base agent is Phase 10)
+- [ ] Remote-control mute/unmute parity: expose the interactive mic-mute toggle (§6.9) as `POST /mute|/unmute` on the agent (interactive-only for the MVP) (PRD §4.2)

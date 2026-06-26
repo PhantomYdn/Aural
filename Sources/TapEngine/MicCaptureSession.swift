@@ -86,17 +86,32 @@ public protocol MultiTrackCaptureSession: CaptureSession {
     var onSourceAudio: (@Sendable (CaptureSource, Data) -> Void)? { get set }
 }
 
+/// A capture session that carries a microphone (mic-only, or `--mix`) and can
+/// silence **only** the mic on demand (interactive mute, PRD §6.9). Unlike pause
+/// (which drops whole chunks), muting keeps the capture running and the timeline
+/// intact: any system audio keeps recording, and a mic-only capture records
+/// silence for the muted interval. Set `micMuted` before `start`; it is polled
+/// on the IO thread. No-op when the session has no microphone.
+public protocol MicMutableCaptureSession: CaptureSession {
+    var micMuted: (@Sendable () -> Bool)? { get set }
+}
+
 /// Captures audio from a microphone/input device and delivers interleaved
 /// little-endian signed PCM in the requested format.
 ///
 /// Capture pipeline: AVAudioEngine input tap (hardware format) ->
 /// PCMStreamConverter (rate/width/channel conversion) -> packed PCM bytes.
-public final class MicCaptureSession: CaptureSession, @unchecked Sendable {
+public final class MicCaptureSession: MicMutableCaptureSession, @unchecked Sendable {
     private let engine = AVAudioEngine()
     private let deviceID: AudioDeviceID?
     private let outputFormat: PCMFormat
     private var converter: PCMStreamConverter?
     private var started = false
+
+    /// When set and it returns true, the converted mic PCM is replaced with
+    /// silence of the same length — the whole stream is the mic, so the output
+    /// is a silent (but full-length) interval (interactive mute, PRD §6.9).
+    public var micMuted: (@Sendable () -> Bool)?
     // Stored so the tap can be reinstalled after an interruption (sleep/route
     // change) without the caller's involvement.
     private var onAudio: (@Sendable (Data) -> Void)?
@@ -203,7 +218,9 @@ public final class MicCaptureSession: CaptureSession, @unchecked Sendable {
             [weak self] buffer, _ in
             guard let self, let converter = self.converter, let onAudio = self.onAudio else { return }
             if let data = converter.convert(buffer) {
-                onAudio(data)
+                // Muted: emit silence of the same length so the recording keeps
+                // its timeline (full wall-clock length) but holds no mic audio.
+                onAudio(self.micMuted?() == true ? Data(count: data.count) : data)
             }
         }
 

@@ -34,6 +34,13 @@ final class LiveTranscriber: AudioSink, @unchecked Sendable {
     private let screenEcho: Bool
     private let screen: FileHandle
 
+    // Interactive yank (PRD §6.9): when set, each finalised caption line (plain
+    // text, with the speaker label when present) is appended here so the `y`
+    // key can copy the whole session transcript to the clipboard. Independent
+    // of `screenEcho` — the transcript-to-stdout case echoes nothing but still
+    // needs the buffer.
+    private let transcriptLog: TranscriptLog?
+
     private var totalBytes: UInt64 = 0
 
     // Transcription runs on a serial queue so segments are transcribed and
@@ -63,6 +70,7 @@ final class LiveTranscriber: AudioSink, @unchecked Sendable {
         useGain: Bool = true,
         screenEcho: Bool = false,
         screen: FileHandle = .standardOutput,
+        transcriptLog: TranscriptLog? = nil,
         pauseSeconds: Double = 0.7,
         maxWindowSeconds: Double = 12,
         minSegmentSeconds: Double = 0.4
@@ -76,6 +84,7 @@ final class LiveTranscriber: AudioSink, @unchecked Sendable {
         self.useGain = useGain
         self.screenEcho = screenEcho
         self.screen = screen
+        self.transcriptLog = transcriptLog
         self.language = language
         self.translate = translate
         self.format = captureFormat
@@ -111,6 +120,7 @@ final class LiveTranscriber: AudioSink, @unchecked Sendable {
         vadThreshold: Double? = nil,
         useGain: Bool = true,
         screenEcho: Bool = false,
+        transcriptLog: TranscriptLog? = nil,
         pauseSeconds: Double = 0.7,
         maxWindowSeconds: Double = 12,
         minSegmentSeconds: Double = 0.4
@@ -123,7 +133,7 @@ final class LiveTranscriber: AudioSink, @unchecked Sendable {
             language: language, translate: translate, captureFormat: captureFormat,
             silenceThresholdDBFS: silenceThresholdDBFS, labelName: "live transcript -> \(destination.label)",
             useVad: useVad, vadThreshold: vadThreshold, useGain: useGain, screenEcho: screenEcho,
-            pauseSeconds: pauseSeconds,
+            transcriptLog: transcriptLog, pauseSeconds: pauseSeconds,
             maxWindowSeconds: maxWindowSeconds, minSegmentSeconds: minSegmentSeconds)
     }
 
@@ -143,6 +153,7 @@ final class LiveTranscriber: AudioSink, @unchecked Sendable {
         vadThreshold: Double? = nil,
         useGain: Bool = true,
         screenEcho: Bool = false,
+        transcriptLog: TranscriptLog? = nil,
         pauseSeconds: Double = 0.7,
         maxWindowSeconds: Double = 12,
         minSegmentSeconds: Double = 0.4
@@ -152,8 +163,8 @@ final class LiveTranscriber: AudioSink, @unchecked Sendable {
             speaker: speaker, language: language, translate: translate, captureFormat: captureFormat,
             silenceThresholdDBFS: silenceThresholdDBFS, labelName: "live transcript [\(speaker)]",
             resolver: resolver, useVad: useVad, vadThreshold: vadThreshold, useGain: useGain,
-            screenEcho: screenEcho, pauseSeconds: pauseSeconds, maxWindowSeconds: maxWindowSeconds,
-            minSegmentSeconds: minSegmentSeconds)
+            screenEcho: screenEcho, transcriptLog: transcriptLog, pauseSeconds: pauseSeconds,
+            maxWindowSeconds: maxWindowSeconds, minSegmentSeconds: minSegmentSeconds)
     }
 
     func write(_ data: Data) throws {
@@ -190,13 +201,14 @@ final class LiveTranscriber: AudioSink, @unchecked Sendable {
                 _ = self.failure.store(error)
                 return
             }
-            // Interactive captions: when the transcript is persisted to a file
-            // the writer never reaches the UI, so mirror the plain text (with the
-            // speaker label when set) to the screen so the live transcript still
-            // appears on-screen (PRD §6.9).
+            // The plain-text caption (with the speaker label when set) is reused
+            // for two interactive features (PRD §6.9): the yank buffer (`y`) and,
+            // when the transcript is persisted to a file (so the writer never
+            // reaches the UI), the on-screen echo of the live transcript.
+            let caption = (speaker.map { "\($0): " } ?? "") + trimmed
+            self.transcriptLog?.append(caption)
             if self.screenEcho {
-                let line = (speaker.map { "\($0): " } ?? "") + trimmed + "\n"
-                try? self.screen.write(contentsOf: Data(line.utf8))
+                try? self.screen.write(contentsOf: Data((caption + "\n").utf8))
             }
         }
     }
