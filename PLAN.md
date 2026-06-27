@@ -392,6 +392,21 @@
 - [x] Tests: `CaptureControl` mute toggle (independent of pause; cleared on stop); `TranscriptLog` accumulation; `ClipboardWriter` fake copy + empty-buffer no-op; hint visibility / no-mic notice; `InteractiveSession.handleKey` dispatch for space/m/y/Enter. `make test` green — 281 tests, 74 suites
 - [ ] Live-capture e2e of interactive mute + yank (real mic) — pending-live list (keypress path can't run permission-free; mic-zeroing in the OS sessions can't run without TCC)
 
+## Phase 11: Legal & Export-Compliance Docs (PRD §7 Legal & Compliance)
+
+> Docs-only hygiene prompted by an external "assess it from the legal
+> standpoint" review (export/import controls, encryption registration). No code,
+> no filings. Self-classification: ancillary crypto only (OS TLS + transitively
+> linked `swift-crypto`), publicly-available open source → EAR99 / not a
+> controlled encryption item; capture is TCC-consent-gated, not interception
+> software. (Informational, not legal advice.)
+
+- [x] PRD: §7 NFR **Legal & Compliance** row + §10 assumption (export/encryption classification deferred TSU notification)
+- [ ] `docs/legal.md`: export classification (Note 4 ancillary exclusion + publicly-available open-source carve-out, EAR99 self-class), encryption import/registration regimes (bind in-country importers, not OSS publication), surveillance/interception (TCC-gated, overt, on-device — not intrusion software), responsible-use / recording-consent (user's responsibility; no network by default, no telemetry)
+- [ ] README: "Legal & responsible use" section (before License) + link to `docs/legal.md`
+- [ ] Light tone pass on surveillance-adjacent phrasing (keep features; frame around consented note-taking)
+- [ ] (Deferred) Optional one-time BIS/NSA **TSU** encryption-notification email — out of scope unless a non-ancillary crypto dep or a commercial/import channel lands (PRD §10 Open Q11)
+
 ## Future
 
 > Nice-to-have items outside current scope.

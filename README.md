@@ -54,9 +54,10 @@ write the notes, decisions, and action items.
 hark --system --mix -t - | fabric-ai -p summarize_meeting
 ```
 
-**Auto-record every Google Meet** — a browser userscript drives hark's
-remote-control agent: it starts a recording when you join a call and stops when
-you leave, naming the file from the meeting title. Zero clicks.
+**Hands-free notes for your Google Meet calls** — a browser userscript drives
+hark's remote-control agent: it starts a recording when you join a call and stops
+when you leave, naming the file from the meeting title. Zero clicks (record with
+everyone's consent — see [Legal & responsible use](#legal--responsible-use)).
 
 ```sh
 hark --remote-control 8473 -C ~/Recordings   # then add the Tampermonkey script (docs/remote-control.md)
@@ -136,6 +137,7 @@ More copy-and-adapt wrappers live in [examples/](examples/) — including
 - [Recipes](#recipes)
 - [Development](#development)
 - [Project documents](#project-documents)
+- [Legal & responsible use](#legal--responsible-use)
 - [License](#license)
 
 ## Requirements
@@ -315,11 +317,12 @@ combined with `-i` or stdout output (`-a -`/`-t -`).
 **Let your browser drive recording.** `hark --remote-control [host:]port` runs
 Hark as a control **agent** (no capture on launch), exposing a small HTTP/JSON
 API so a script — or a browser userscript — can start/pause/resume/stop/query a
-recording. The headline use: a **Tampermonkey userscript that auto-records every
-Google Meet** — it `POST`s `/start` when you join a call (filename derived from
-the meeting title) and `/stop` when you leave, with no clicks. The ready-to-use
-script and full API reference are in
-[docs/remote-control.md](docs/remote-control.md).
+recording. The headline use: a **Tampermonkey userscript for hands-free notes on
+your Google Meet calls** — it `POST`s `/start` when you join a call (filename
+derived from the meeting title) and `/stop` when you leave, with no clicks
+(record with everyone's consent — see
+[Legal & responsible use](#legal--responsible-use)). The ready-to-use script and
+full API reference are in [docs/remote-control.md](docs/remote-control.md).
 
 ```sh
 hark --remote-control 8473 -C ~/Recordings   # loopback agent, recordings under ~/Recordings
@@ -427,7 +430,23 @@ Speech authorization) and skip cleanly when absent. Contributions welcome — se
 - [docs/reference.md](docs/reference.md) — full flag, environment & config reference
 - [docs/permissions.md](docs/permissions.md) — TCC permission setup
 - [docs/remote-control.md](docs/remote-control.md) — remote-control HTTP API
+- [docs/legal.md](docs/legal.md) — export classification & responsible use
 - [CHANGELOG.md](CHANGELOG.md) — release notes
+
+## Legal & responsible use
+
+hark records audio, so **whether a given recording is lawful is up to you.**
+Recording-consent rules vary by jurisdiction — some places require **all-party
+consent**, and recorded voice can be personal data under the GDPR. Make sure you
+have consent and a legal basis before recording calls, meetings, or other people.
+
+hark is built to make that easy to do right: capture is **consent-gated by macOS
+permissions** (it can't record covertly), everything runs **on-device**, and
+there's **no telemetry and no network access by default**. On the export side,
+hark contains no proprietary cryptography — only ancillary OS-provided TLS for
+opt-in downloads — and is self-classified **EAR99** as publicly-available open
+source. Details and the full classification note are in
+**[docs/legal.md](docs/legal.md)** (informational, not legal advice).
 
 ## License
 
