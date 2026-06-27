@@ -35,11 +35,23 @@ hark -i recording.m4a                       # transcribe a file
 
 ## Use cases
 
-**Record a meeting with who-said-what** — capture the call (system audio) plus
-your mic, labeled by speaker, straight to subtitles.
+Several of these pipe hark straight into
+**[fabric-ai](https://github.com/danielmiessler/Fabric)** — hark turns sound into
+text, fabric turns text into summaries, action items, and insights
+(`brew install fabric-ai`).
+
+**Watch live captions while you record** — see the transcript stream in your
+terminal and save it to a file at the same time (pause, mute, or yank as you go).
 
 ```sh
-hark --system --mix --speakers -t standup.srt
+hark --interactive --system --mix -t meeting.txt
+```
+
+**Summarize a meeting with AI** — capture the call + your mic, then let fabric
+write the notes, decisions, and action items.
+
+```sh
+hark --system --mix -t - | fabric-ai -p summarize_meeting
 ```
 
 **Auto-record every Google Meet** — a browser userscript drives hark's
@@ -56,25 +68,34 @@ hark --remote-control 8473 -C ~/Recordings   # then add the Tampermonkey script 
 hark --engine apple -t - | pbcopy
 ```
 
+**Mine a talk or podcast for insights** — pull the key ideas, quotes, and
+references out of any recording.
+
+```sh
+hark -i podcast.mp3 -t - | fabric-ai -p extract_wisdom
+```
+
 **Capture a quick voice memo** — timestamped audio + transcript in one shot.
 
 ```sh
 hark -a memo.m4a -t memo.txt
 ```
 
-**Transcribe an interview or podcast file** — any format in, subtitles or JSON out.
+**Transcribe a file to subtitles or JSON** — any format in, `.srt`/`.json` out.
 
 ```sh
-hark -i interview.mp3 -t interview.srt
+hark -i lecture.m4a -t lecture.srt
 ```
 
-**Watch live captions in your terminal** — pause, mute, or yank the text as you go.
+**Label who said what** — separate your mic from the call (You / Others), plus
+per-voice `Speaker N`.
 
 ```sh
-hark --interactive --system --mix
+hark --system --mix --speakers -t meeting.srt
 ```
 
-More copy-and-adapt wrappers live in [examples/](examples/).
+More copy-and-adapt wrappers live in [examples/](examples/) — including
+`hark-meeting`, which records a call and runs it through fabric-ai for you.
 
 > [!NOTE]
 > **Status: pre-1.0 beta.** Core capture, transcoding, and transcription work;
