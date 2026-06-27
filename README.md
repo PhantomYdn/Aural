@@ -9,6 +9,7 @@
   <img src="https://img.shields.io/badge/macOS-14.4%2B-black?logo=apple" alt="macOS 14.4+">
   <img src="https://img.shields.io/badge/Swift-6-orange?logo=swift&logoColor=white" alt="Swift 6">
   <a href="https://github.com/PhantomYdn/hark/releases"><img src="https://img.shields.io/github/downloads/PhantomYdn/hark/total?color=2DD4BF" alt="Downloads"></a>
+  <a href="https://github.com/PhantomYdn/hark/stargazers"><img src="https://img.shields.io/github/stars/PhantomYdn/hark?style=social" alt="Star hark"></a>
 </p>
 
 <p align="center">
@@ -16,16 +17,64 @@
 </p>
 
 **`hark`** is the verb — *"listen and transcribe."* It captures your microphone,
-all system audio, or specific apps on macOS, and turns it into a transcript —
-from a single native Swift binary with no drivers, no Electron, and no network
-calls by default. It is built for the terminal: one input, the outputs you name,
-and clean stdout/stdin streaming for Unix-style pipelines.
+all system audio, or specific apps on macOS and turns it into a transcript —
+from a single native Swift binary, no drivers, no Electron, no network calls by
+default. It's built the **Unix way**: do one thing well, one input → the outputs
+you name, and clean stdin/stdout streaming that composes with `ffmpeg`, `sox`,
+and your shell. Transcribe on-device with your pick of engines — whisper.cpp,
+Apple Speech, WhisperKit, or Parakeet.
 
 ```sh
 hark                                        # live mic → transcript on stdout
 hark --system --mix -a meeting.m4a -t meeting.srt   # record a call, keep audio + subtitles
 hark -i recording.m4a                       # transcribe a file
 ```
+
+> ⭐ If hark saves you time, please [star it](https://github.com/PhantomYdn/hark) —
+> stars help it qualify for a tap-free `brew install`.
+
+## Use cases
+
+**Record a meeting with who-said-what** — capture the call (system audio) plus
+your mic, labeled by speaker, straight to subtitles.
+
+```sh
+hark --system --mix --speakers -t standup.srt
+```
+
+**Auto-record every Google Meet** — a browser userscript drives hark's
+remote-control agent: it starts a recording when you join a call and stops when
+you leave, naming the file from the meeting title. Zero clicks.
+
+```sh
+hark --remote-control 8473 -C ~/Recordings   # then add the Tampermonkey script (docs/remote-control.md)
+```
+
+**Dictate straight to your clipboard** — speak, get text, paste anywhere.
+
+```sh
+hark --engine apple -t - | pbcopy
+```
+
+**Capture a quick voice memo** — timestamped audio + transcript in one shot.
+
+```sh
+hark -a memo.m4a -t memo.txt
+```
+
+**Transcribe an interview or podcast file** — any format in, subtitles or JSON out.
+
+```sh
+hark -i interview.mp3 -t interview.srt
+```
+
+**Watch live captions in your terminal** — pause, mute, or yank the text as you go.
+
+```sh
+hark --interactive --system --mix
+```
+
+More copy-and-adapt wrappers live in [examples/](examples/).
 
 > [!NOTE]
 > **Status: pre-1.0 beta.** Core capture, transcoding, and transcription work;
@@ -70,7 +119,11 @@ hark -i recording.m4a                       # transcribe a file
 
 ## Requirements
 
-- macOS 14.4 or later (Core Audio process-tap API). Apple Silicon and Intel.
+- **macOS 14.4 (Sonoma) or later** — required for the Core Audio process-tap
+  API. Apple Silicon and Intel.
+- The optional **ScreenCaptureKit** backend (`--capture-backend sckit`) needs
+  **macOS 15 (Sequoia) or later**; on 14.x hark uses the Core Audio backend
+  automatically.
 - For the `whisper` engine: a whisper.cpp binary on `PATH`
   (`brew install whisper-cpp`) and a ggml model.
 - For the `apple` engine: the Speech Recognition permission (granted on first
@@ -111,12 +164,15 @@ The arm64 binary is also attached to each
 workaround needed. The stable signature also means privacy grants persist across
 upgrades instead of resetting on each new binary.
 
-Then install a transcription engine and model:
+Then set up an on-device transcription model:
 
 ```sh
-brew install whisper-cpp                 # the default 'whisper' engine
-hark models download base.en --default  # fetch a model and make it the default
+hark models download parakeet:v3 --default   # on-device CoreML; sets engine=parakeet
 ```
+
+Parakeet runs fully on-device (Apple Silicon) and needs no extra tools. Prefer
+whisper.cpp — or on Intel — instead? Use
+`brew install whisper-cpp && hark models download base.en --default`.
 
 ## Quick start
 
@@ -125,9 +181,7 @@ hark                                  # live mic -> transcript on stdout (Ctrl+C
 hark -i recording.m4a                 # transcribe a file -> stdout
 hark -a rec.m4a                       # record only (no transcript)
 hark -a rec.m4a -t notes.txt          # record + transcribe to files
-hark --system --mix -a mtg.m4a -t mtg.srt   # capture a meeting, keep audio + subtitles
 hark -i in.wav -a out.flac            # transcode between formats
-hark --engine apple                   # transcribe live with on-device Apple speech
 ```
 
 ## Usage
@@ -237,9 +291,14 @@ combined with `-i` or stdout output (`-a -`/`-t -`).
 
 ## Remote control
 
-`hark --remote-control [host:]port` runs Hark as a control **agent** instead of
-capturing on launch, serving a small HTTP/JSON API so scripts (or a browser
-userscript) can start/pause/resume/stop/query a recording.
+**Let your browser drive recording.** `hark --remote-control [host:]port` runs
+Hark as a control **agent** (no capture on launch), exposing a small HTTP/JSON
+API so a script — or a browser userscript — can start/pause/resume/stop/query a
+recording. The headline use: a **Tampermonkey userscript that auto-records every
+Google Meet** — it `POST`s `/start` when you join a call (filename derived from
+the meeting title) and `/stop` when you leave, with no clicks. The ready-to-use
+script and full API reference are in
+[docs/remote-control.md](docs/remote-control.md).
 
 ```sh
 hark --remote-control 8473 -C ~/Recordings   # loopback agent, recordings under ~/Recordings
@@ -251,8 +310,6 @@ curl -s -X POST http://127.0.0.1:8473/stop
 ```
 
 Bound to loopback by default; a non-loopback bind requires `$HARK_REMOTE_TOKEN`.
-Full API reference and a Tampermonkey Google-Meet auto-record userscript:
-[docs/remote-control.md](docs/remote-control.md).
 
 ## Models
 
