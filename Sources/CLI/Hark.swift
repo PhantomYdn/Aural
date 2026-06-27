@@ -38,7 +38,7 @@ struct Hark: ParsableCommand {
             model; apple/whisperkit/parakeet are alternatives (see --engine, \
             'hark models').
             """,
-        version: "0.2.1",
+        version: "0.3.0",
         subcommands: [
             Devices.self,
             Apps.self,
@@ -644,7 +644,7 @@ struct Hark: ParsableCommand {
         defer { interactiveSession?.stop() }
 
         let metadata = WAVMetadata(
-            creationDate: Date(), software: "hark 0.2.1", title: sourceLabel)
+            creationDate: Date(), software: "hark 0.3.0", title: sourceLabel)
 
         var sinks: [AudioSink] = []
         if let audioDest = outputs.audio {

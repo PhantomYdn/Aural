@@ -6,12 +6,23 @@ All notable changes to Hark are documented here. The format is loosely based on
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-06-26
+
 ### Added
 - Two interactive controls (`--interactive`): **m** mutes/unmutes the
   microphone — only the mic is silenced, so any system audio keeps recording and
   the timeline is preserved (distinct from pause, which omits the interval); the
   hint shows it only when a mic is in the capture. **y** yanks the transcript
   captured so far to the system clipboard (local only, no network).
+
+### Fixed
+- The VAD segmenter no longer deadlocks the Swift cooperative thread pool, which
+  could stall live transcription (and hung CI).
+
+### Documentation
+- Overhauled the README (hero banner, demo GIF, use cases including fabric-ai
+  pipelines, star CTA), added `docs/reference.md` and community-health files, and
+  switched the direct-binary onboarding default to on-device Parakeet v3.
 
 ## [0.2.1] - 2026-06-24
 
@@ -106,6 +117,7 @@ transcribes them, and composes into Unix pipelines.
 - The release binary is signed (Developer ID) and notarized, so it passes
   Gatekeeper; its stable code identity keeps privacy grants across upgrades.
 
+[0.3.0]: https://github.com/PhantomYdn/hark/releases/tag/v0.3.0
 [0.2.1]: https://github.com/PhantomYdn/hark/releases/tag/v0.2.1
 [0.2.0]: https://github.com/PhantomYdn/hark/releases/tag/v0.2.0
 [0.1.0]: https://github.com/PhantomYdn/hark/releases/tag/v0.1.0
